@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>飞车 3D · 对战后台运维台</title>
+<style>
+:root{
+  --bg:#080f22; --bg2:#0d1733; --card:rgba(18,32,68,.72); --card2:rgba(12,22,50,.9);
+  --line:rgba(120,190,255,.22); --txt:#eaf3ff; --muted:#8fa6c8;
+  --cyan:#27c7ff; --blue:#1d6ff2; --green:#3ddc97; --amber:#ffc44d; --red:#ff6b7d; --pink:#ff5fa8;
+  --ui:"PingFang SC","Microsoft YaHei","Noto Sans SC","Hiragino Sans GB",sans-serif;
+  --num:ui-monospace,"Consolas","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 700px at 15% -10%,#16264f 0%,var(--bg) 60%) fixed,var(--bg);
+  color:var(--txt);font-family:var(--ui);font-size:14px;line-height:1.5;min-height:100vh}
+a{color:var(--cyan)}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:14px 22px;background:linear-gradient(180deg,rgba(8,15,34,.96),rgba(8,15,34,.72));
+  border-bottom:1px solid var(--line);backdrop-filter:blur(8px)}
+h1{font-size:17px;letter-spacing:2px}
+h1 span{color:var(--cyan)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--line);
+  border-radius:99px;font-size:12px;color:var(--muted);font-family:var(--num)}
+.pill b{color:var(--txt);font-weight:600}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.dot.bad{background:var(--red);box-shadow:0 0 8px var(--red)}
+.spacer{flex:1}
+button{font:inherit;font-size:13px;color:var(--txt);background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;cursor:pointer;transition:.15s}
+button:hover{border-color:var(--cyan);color:#fff;background:var(--card2)}
+button.warn:hover{border-color:var(--red);color:var(--red)}
+button.primary{background:linear-gradient(180deg,#1d6ff2,#1450b8);border-color:#3d8bff}
+button.tiny{padding:2px 8px;font-size:12px;border-radius:6px}
+button:disabled{opacity:.4;cursor:default}
+main{padding:18px 22px 40px;max-width:1500px;margin:0 auto}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 13px}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-family:var(--num);font-size:23px;font-weight:700;letter-spacing:-.5px}
+.kpi .s{font-size:11px;color:var(--muted)}
+.kpi.alert .v{color:var(--amber)}
+.cols{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:1080px){.cols{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.panel>h2{display:flex;align-items:center;gap:10px;padding:11px 14px;font-size:13px;letter-spacing:1px;
+  color:var(--muted);border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+.panel>h2 b{color:var(--txt);font-weight:600;font-family:var(--num)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;font-size:11px;letter-spacing:1px;color:var(--muted);
+  padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid rgba(120,190,255,.09);vertical-align:middle}
+tbody tr:hover{background:rgba(39,199,255,.06)}
+tbody tr.sel{background:rgba(39,199,255,.11)}
+td.n,th.n{font-family:var(--num);text-align:right}
+.code{font-family:var(--num);font-weight:700;color:var(--cyan);letter-spacing:1px;cursor:pointer}
+.tag{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;border:1px solid var(--line);color:var(--muted)}
+.tag.lobby{color:var(--cyan);border-color:rgba(39,199,255,.4)}
+.tag.race{color:var(--green);border-color:rgba(61,220,151,.45)}
+.tag.mid{color:var(--amber);border-color:rgba(255,196,77,.4)}
+.tag.off{color:var(--red);border-color:rgba(255,107,125,.45)}
+.tag.bot{color:#b9c8e0}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;min-width:56px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+.rowbar{display:flex;align-items:center;gap:8px}
+.empty{padding:26px 14px;color:var(--muted);text-align:center;font-size:13px}
+.maps{display:grid;gap:7px;padding:12px 14px}
+.maprow{display:grid;grid-template-columns:96px 1fr 46px;gap:10px;align-items:center;font-size:13px}
+.maprow .n{text-align:right;color:var(--muted);font-family:var(--num)}
+.log{font-family:var(--num);font-size:12px;color:var(--muted);padding:10px 14px;max-height:190px;overflow:auto}
+.log div{padding:1px 0;border-bottom:1px dashed rgba(120,190,255,.1)}
+.log .k{color:var(--cyan)}
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(6,11,26,.9);z-index:20}
+#login .box{width:340px;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:22px}
+#login h3{font-size:15px;letter-spacing:1px;margin-bottom:6px}
+#login p{font-size:12px;color:var(--muted);margin-bottom:12px}
+#login input{width:100%;padding:9px 11px;font:inherit;font-family:var(--num);color:var(--txt);
+  background:#0a142e;border:1px solid var(--line);border-radius:8px;margin-bottom:10px}
+.hidden{display:none!important}
+.err{color:var(--red);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>飞车 3D · <span>对战运维台</span></h1>
+  <span class="pill"><i id="hb" class="dot"></i><b id="hbtext">连接中</b></span>
+  <span class="pill">仿真 <b>120Hz</b></span>
+  <span class="pill">快照 <b>20Hz</b></span>
+  <span class="pill">运行 <b id="uptime">-</b></span>
+  <span class="spacer"></span>
+  <span class="pill">每 <b id="ivlabel">2</b> 秒刷新</span>
+  <button id="pause">暂停</button>
+  <button id="refresh">立即刷新</button>
+  <a class="pill" href="/" target="_blank" style="text-decoration:none">游戏主页 ↗</a>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+  <div class="cols">
+    <section class="panel">
+      <h2>房间 <b id="rcount">0</b> <span class="spacer"></span> <span id="rnote"></span></h2>
+      <div style="overflow:auto">
+      <table>
+        <thead><tr>
+          <th>房间码</th><th>地图</th><th>状态</th><th class="n">人数</th><th class="n">圈</th>
+          <th>模式</th><th class="n">建立</th><th></th>
+        </tr></thead>
+        <tbody id="rooms"><tr><td colspan="8" class="empty">读取中…</td></tr></tbody>
+      </table>
+      </div>
+      <h2 style="border-top:1px solid var(--line)">地图使用</h2>
+      <div class="maps" id="maps"></div>
+    </section>
+    <section class="panel">
+      <h2>席位实况 <b id="dcode">未选择</b> <span class="spacer"></span> <span id="dnote" class="err"></span></h2>
+      <div style="overflow:auto">
+      <table>
+        <thead><tr>
+          <th class="n">名次</th><th>车手</th><th class="n">速度</th><th class="n">进度</th>
+          <th class="n">圈</th><th class="n">最佳</th><th class="n">延迟</th><th class="n">积压</th><th class="n">丢包</th><th></th>
+        </tr></thead>
+        <tbody id="cars"><tr><td colspan="10" class="empty">点左侧房间码查看每辆车实况</td></tr></tbody>
+      </table>
+      </div>
+      <h2 style="border-top:1px solid var(--line)">操作记录</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</main>
+<div id="login" class="hidden">
+  <div class="box">
+    <h3>需要访问口令</h3>
+    <p>口令在服务器启动日志里，或见 <code>deploy.sh status</code>。只有本机与同一局域网可访问。</p>
+    <input id="key" type="password" placeholder="访问口令" autocomplete="off" />
+    <div class="err hidden" id="keyerr">口令不正确</div>
+    <button class="primary" id="enter" style="width:100%">进入运维台</button>
+  </div>
+</div>
+<!--ADMIN_SCRIPT-->
+</body>
+</html>
