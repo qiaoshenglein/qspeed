@@ -1,0 +1,14 @@
+PASS 创建房间并拿到席位令牌 · code=KPQX car=1
+PASS 第二名玩家加入同一房间 · KPQX car=2
+PASS 房间在公开列表里 · [{"code":"KPQX","map":"city","mapName":"11城","laps":2,"mode":0,"players":2,"online":2,"cap":6,"phase":0,"listed":true}]
+PASS 全员准备后自动开赛并持续收快照 · phase=2 snaps=62
+诊断：log=[car=1/phase=0 car=1/phase=2/rejoin] reconns=0 token=ckrg4o0
+PASS 断线后自动重连成功 · connected=true reconns=0
+PASS 回线拿回同一个车位 · 1 → 1
+PASS 回线后快照继续增长 · 62 → 78
+PASS 回线后本车对齐到服务器位置 · 偏差 0.65m
+PASS 回线过程不产生新席位 · players=2
+PASS 回线后继续收到比赛事件 · 29 条
+PASS 回线后服务器交还驾驶权 · auto=false speed=38.78
+
+结果：11 通过 / 0 失败

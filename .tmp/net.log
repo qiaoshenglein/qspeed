@@ -1,0 +1,137 @@
+$ bun test/race-unit.mjs && bun test/items-unit.mjs && bun test/net-race.mjs && ITEM=1 bun test/net-race.mjs && bun test/rooms-reconnect.mjs && bun test/reconnect-core.mjs
+PASS 过线前不误计圈 · laps=0
+PASS 过起点线计一圈 · laps=1
+PASS 同一圈不会重复计数 · laps=1
+PASS 倒车过线回退圈数 · laps=0 owed=true
+PASS 未过半程时过线不计圈 · laps=0
+PASS 跑满圈数标记完赛 · lap=1/1
+PASS 首个完赛者被记录
+PASS 超时后结算
+PASS 完赛者优先排名 · 甲,乙
+PASS 未完赛者名次在其后
+PASS 过早起步不算 · startBoost=0
+PASS 窗口内起步获得起步喷 · s=17.2 boost=1.38
+PASS 1500 tick 双跑逐位一致 · (206.077140,-14.605790) vs (206.077140,-14.605790)
+PASS 车真的在动 · s=55.0
+PASS 状态无 NaN
+PASS 漂移可以集气 · nitro=0 gauge=0.69
+
+结果：16 通过 / 0 失败
+PASS 道具箱数量与摆位确定
+PASS 道具箱都在路面内
+PASS 领跑更容易拿到香蕉 · 领先 1411 vs 垫底 104
+PASS 垫底更容易拿到导弹 · 垫底 1286 vs 领先 433
+PASS 道具槽最多两个
+PASS 同种子发放一致
+PASS 压过箱子即获得道具 · items=shield
+PASS 箱子进入冷却
+PASS 拾取事件带箱子序号 · box=10
+PASS 冷却结束后箱子恢复
+PASS 香蕉被放下
+PASS 放置者短时间内免疫
+PASS 对手压到香蕉会转圈 · spin=0.98 s=0.0
+PASS 命中后香蕉消失
+PASS 受击事件推给对手车辆
+PASS 前车在名次上确实领先 · lead#1 back#2
+PASS 导弹锁定前车 · 1 枚，目标 5
+PASS 锁定事件告知被锁定者
+PASS 导弹最终命中目标 · spin=1.30
+PASS 命中后导弹移除
+PASS 命中事件带着被击车辆 id
+PASS 护盾吃掉一次命中 · shield=0 spin=0
+PASS 护盾命中有事件
+PASS 磁铁生效并锁定前车 · magnet=3 target=无
+PASS 道具氮气立即起效 · nitroTime=2.80
+PASS 道具槽随快照下发 · 槽=shield/
+PASS 香蕉实体随快照下发
+PASS 箱子可见位图随快照下发
+PASS ITEM_CODE 与协议编码一致
+PASS 竞速模式快照不含道具段 · 42 字节
+
+结果：30 通过 / 0 失败
+PASS 两个客户端都拿到房间码 · code=KLW9/KLW9
+PASS 车辆 id 不同 · 1/2
+PASS 进入比赛阶段 · phase=2
+PASS 快照频率约 20Hz · 26.8Hz
+PASS 甲车在前进 · 424m
+PASS 乙车在前进 · 373m
+PASS 预测误差可控(<0.6m) · 甲 maxErr=0m 回滚16次
+PASS 预测误差可控 乙(<0.6m) · 乙 maxErr=0m 回滚0次
+PASS 客户端 tick 与服务器世界 tick 同步 · 甲差5 乙差5
+PASS 速度未超物理上限 · 55.1/55.0 m/s，上限 76
+PASS 名次由服务器判定且互不相同 · 甲2 乙6
+PASS 两端的车辆集合一致
+PASS bot 补满 6 台车 · 6
+PASS 下行带宽在预算内 · 5.94 KB/s（竞速模式）
+PASS 上行带宽 < 1KB/s · 0.68 KB/s
+PASS 往返延迟已测量 · 3ms
+PASS 有人掉线后比赛继续推送 · 30 帧/1.5s
+PASS 掉线车辆被服务端接管 · speed=48.6
+
+结果：18 通过 / 0 失败
+PASS 两个客户端都拿到房间码 · code=KENQ/KENQ
+PASS 车辆 id 不同 · 1/2
+PASS 进入比赛阶段 · phase=2
+PASS 快照频率约 20Hz · 24.1Hz
+PASS 甲车在前进 · 727m
+PASS 乙车在前进 · 613m
+PASS 预测误差可控(<0.6m) · 甲 maxErr=0m 回滚15次
+PASS 预测误差可控 乙(<0.6m) · 乙 maxErr=0m 回滚0次
+PASS 客户端 tick 与服务器世界 tick 同步 · 甲差5 乙差4
+PASS 速度未超物理上限 · 55.2/47.0 m/s，上限 76
+PASS 名次由服务器判定且互不相同 · 甲5 乙6
+PASS 两端的车辆集合一致
+PASS bot 补满 6 台车 · 6
+PASS 下行带宽在预算内 · 5.95 KB/s（道具模式）
+PASS 道具随快照下发到客户端 · 4 台车同时持有过道具：末帧已用完
+PASS 道具箱可见位图与服务器一致 · mask=111111111111…
+PASS 场上有道具实体在飞行/落地 · 同场最多 1 个实体
+PASS 道具使用由服务器结算并广播 · 观察到 4 次使用、0 次命中
+PASS 真人使用的道具由服务器消费 · 观察到 2465 次持有道具的快照
+PASS 客户端观察到箱子被踩掉 · 末帧位图 11111111111111111111
+PASS 道具模式预测误差有界(<4m) · A 0m / B 0m
+PASS 道具模式带宽 < 9KB/s · 5.95 KB/s
+PASS 上行带宽 < 1KB/s · 0.68 KB/s
+PASS 往返延迟已测量 · 10ms
+PASS 有人掉线后比赛继续推送 · 30 帧/1.5s
+PASS 掉线车辆被服务端接管 · speed=43.1
+
+结果：26 通过 / 0 失败
+PASS 创建房间拿到房间码与席位令牌 · code=66HD token=xfzykf…
+PASS 新房间出现在公开列表 · {"code":"66HD","map":"city","mapName":"11城","laps":2,"mode":0,"players":1,"online":1,"cap":6,"phase":0,"listed":true}
+PASS 列表带地图/圈数/模式/上限 · 11城 2圈 0 1/6
+PASS 凭房间码自由加入 · 66HD car=2
+PASS 列表人数随加入增长 · players=2
+PASS 设置不符时服务器拒绝并入列原因 · 房间地图是 11城
+PASS 掉线后席位仍保留 · players=2
+PASS 在线名单标出掉线席位 · ["甲:off","乙:on"]
+PASS 凭令牌回线拿回同一个车位 · 旧 1 → 新 1
+PASS 回线后在线状态恢复 · ["甲:true","乙:true"]
+PASS 全员准备后自动开赛 · phase=2 快照=60
+PASS 掉线车辆被服务端接管 · speed=28.66
+PASS 对手掉线后比赛继续推送 · 86 → 107
+PASS 比赛中回线仍是同一车位 · car=1
+PASS 比赛中回线直接回到赛况阶段 · phase=2 tick=646
+PASS 回线后继续收到快照 · 4 帧
+PASS 回线后驾驶权交还真人 · auto=false
+PASS 回线客户端 tick 与服务器对齐 · welcome=646 world=669
+PASS 超期未回线则释放席位 · members=1 cars=6
+PASS 超期车辆由服务端继续跑完 · 甲·auto,乙,漂移少女,氮气小王子,风之子,夜の车神
+PASS 满员房间仍在列表但不再可加入 · 6/6 listed=false
+PASS 满员时拒绝新玩家 · 房间已满
+PASS 无效令牌按新玩家加入而非报错 · car=14
+
+结果：23 通过 / 0 失败
+PASS 创建房间并拿到席位令牌 · code=S7P9 car=1
+PASS 第二名玩家加入同一房间 · S7P9 car=2
+PASS 房间在公开列表里 · [{"code":"S7P9","map":"city","mapName":"11城","laps":2,"mode":0,"players":2,"online":2,"cap":6,"phase":0,"listed":true}]
+PASS 全员准备后自动开赛并持续收快照 · phase=2 snaps=62
+PASS 断线后自动重连成功 · connected=true reconns=0
+PASS 回线拿回同一个车位 · 1 → 1
+PASS 回线后快照继续增长 · 62 → 78
+PASS 回线后本车对齐到服务器位置 · 偏差 2.27m
+PASS 回线过程不产生新席位 · players=2
+PASS 回线后继续收到比赛事件 · 29 条
+PASS 回线后服务器交还驾驶权 · auto=false speed=39.01
+
+结果：11 通过 / 0 失败
