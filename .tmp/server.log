@@ -1,1 +1,2 @@
 赛车对战服务已启动 http://localhost:8790  (ws://localhost:8790/ws)
+后台运维台 http://localhost:8790/admin?key=kd9cwk8gkbz6c9mi8vf26r4s  （口令来自 .data/admin-token，仅本机/局域网可达）

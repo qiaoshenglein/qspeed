@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>飞车 3D · 对战后台运维台</title>
+<style>
+:root{
+  --bg:#080f22; --bg2:#0d1733; --card:rgba(18,32,68,.72); --card2:rgba(12,22,50,.9);
+  --line:rgba(120,190,255,.22); --txt:#eaf3ff; --muted:#8fa6c8;
+  --cyan:#27c7ff; --blue:#1d6ff2; --green:#3ddc97; --amber:#ffc44d; --red:#ff6b7d; --pink:#ff5fa8;
+  --ui:"PingFang SC","Microsoft YaHei","Noto Sans SC","Hiragino Sans GB",sans-serif;
+  --num:ui-monospace,"Consolas","Menlo",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 700px at 15% -10%,#16264f 0%,var(--bg) 60%) fixed,var(--bg);
+  color:var(--txt);font-family:var(--ui);font-size:14px;line-height:1.5;min-height:100vh}
+a{color:var(--cyan)}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:14px 22px;background:linear-gradient(180deg,rgba(8,15,34,.96),rgba(8,15,34,.72));
+  border-bottom:1px solid var(--line);backdrop-filter:blur(8px)}
+h1{font-size:17px;letter-spacing:2px}
+h1 span{color:var(--cyan)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--line);
+  border-radius:99px;font-size:12px;color:var(--muted);font-family:var(--num)}
+.pill b{color:var(--txt);font-weight:600}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.dot.bad{background:var(--red);box-shadow:0 0 8px var(--red)}
+.spacer{flex:1}
+button{font:inherit;font-size:13px;color:var(--txt);background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;cursor:pointer;transition:.15s}
+button:hover{border-color:var(--cyan);color:#fff;background:var(--card2)}
+button.warn:hover{border-color:var(--red);color:var(--red)}
+button.primary{background:linear-gradient(180deg,#1d6ff2,#1450b8);border-color:#3d8bff}
+button.tiny{padding:2px 8px;font-size:12px;border-radius:6px}
+button:disabled{opacity:.4;cursor:default}
+main{padding:18px 22px 40px;max-width:1500px;margin:0 auto}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 13px}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-family:var(--num);font-size:23px;font-weight:700;letter-spacing:-.5px}
+.kpi .s{font-size:11px;color:var(--muted)}
+.kpi.alert .v{color:var(--amber)}
+.cols{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:1080px){.cols{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.panel>h2{display:flex;align-items:center;gap:10px;padding:11px 14px;font-size:13px;letter-spacing:1px;
+  color:var(--muted);border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+.panel>h2 b{color:var(--txt);font-weight:600;font-family:var(--num)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;font-size:11px;letter-spacing:1px;color:var(--muted);
+  padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid rgba(120,190,255,.09);vertical-align:middle}
+tbody tr:hover{background:rgba(39,199,255,.06)}
+tbody tr.sel{background:rgba(39,199,255,.11)}
+td.n,th.n{font-family:var(--num);text-align:right}
+.code{font-family:var(--num);font-weight:700;color:var(--cyan);letter-spacing:1px;cursor:pointer}
+.tag{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;border:1px solid var(--line);color:var(--muted)}
+.tag.lobby{color:var(--cyan);border-color:rgba(39,199,255,.4)}
+.tag.race{color:var(--green);border-color:rgba(61,220,151,.45)}
+.tag.mid{color:var(--amber);border-color:rgba(255,196,77,.4)}
+.tag.off{color:var(--red);border-color:rgba(255,107,125,.45)}
+.tag.bot{color:#b9c8e0}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;min-width:56px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+.rowbar{display:flex;align-items:center;gap:8px}
+.empty{padding:26px 14px;color:var(--muted);text-align:center;font-size:13px}
+.maps{display:grid;gap:7px;padding:12px 14px}
+.maprow{display:grid;grid-template-columns:96px 1fr 46px;gap:10px;align-items:center;font-size:13px}
+.maprow .n{text-align:right;color:var(--muted);font-family:var(--num)}
+.log{font-family:var(--num);font-size:12px;color:var(--muted);padding:10px 14px;max-height:190px;overflow:auto}
+.log div{padding:1px 0;border-bottom:1px dashed rgba(120,190,255,.1)}
+.log .k{color:var(--cyan)}
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(6,11,26,.9);z-index:20}
+#login .box{width:340px;background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:22px}
+#login h3{font-size:15px;letter-spacing:1px;margin-bottom:6px}
+#login p{font-size:12px;color:var(--muted);margin-bottom:12px}
+#login input{width:100%;padding:9px 11px;font:inherit;font-family:var(--num);color:var(--txt);
+  background:#0a142e;border:1px solid var(--line);border-radius:8px;margin-bottom:10px}
+.hidden{display:none!important}
+.err{color:var(--red);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>飞车 3D · <span>对战运维台</span></h1>
+  <span class="pill"><i id="hb" class="dot"></i><b id="hbtext">连接中</b></span>
+  <span class="pill">仿真 <b>120Hz</b></span>
+  <span class="pill">快照 <b>20Hz</b></span>
+  <span class="pill">运行 <b id="uptime">-</b></span>
+  <span class="spacer"></span>
+  <span class="pill">每 <b id="ivlabel">2</b> 秒刷新</span>
+  <button id="pause">暂停</button>
+  <button id="refresh">立即刷新</button>
+  <a class="pill" href="/" target="_blank" style="text-decoration:none">游戏主页 ↗</a>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+  <div class="cols">
+    <section class="panel">
+      <h2>房间 <b id="rcount">0</b> <span class="spacer"></span> <span id="rnote"></span></h2>
+      <div style="overflow:auto">
+      <table>
+        <thead><tr>
+          <th>房间码</th><th>地图</th><th>状态</th><th class="n">人数</th><th class="n">圈</th>
+          <th>模式</th><th class="n">建立</th><th></th>
+        </tr></thead>
+        <tbody id="rooms"><tr><td colspan="8" class="empty">读取中…</td></tr></tbody>
+      </table>
+      </div>
+      <h2 style="border-top:1px solid var(--line)">地图使用</h2>
+      <div class="maps" id="maps"></div>
+    </section>
+    <section class="panel">
+      <h2>席位实况 <b id="dcode">未选择</b> <span class="spacer"></span> <span id="dnote" class="err"></span></h2>
+      <div style="overflow:auto">
+      <table>
+        <thead><tr>
+          <th class="n">名次</th><th>车手</th><th class="n">速度</th><th class="n">进度</th>
+          <th class="n">圈</th><th class="n">最佳</th><th class="n">延迟</th><th class="n">积压</th><th class="n">丢包</th><th></th>
+        </tr></thead>
+        <tbody id="cars"><tr><td colspan="10" class="empty">点左侧房间码查看每辆车实况</td></tr></tbody>
+      </table>
+      </div>
+      <h2 style="border-top:1px solid var(--line)">操作记录</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</main>
+<div id="login" class="hidden">
+  <div class="box">
+    <h3>需要访问口令</h3>
+    <p>口令在服务器启动日志里，或见 <code>deploy.sh status</code>。只有本机与同一局域网可访问。</p>
+    <input id="key" type="password" placeholder="访问口令" autocomplete="off" />
+    <div class="err hidden" id="keyerr">口令不正确</div>
+    <button class="primary" id="enter" style="width:100%">进入运维台</button>
+  </div>
+</div>
+<script>(()=>{var s=t=>document.getElementById(t),g=new URLSearchParams(location.search).get("key"),l=g||localStorage.getItem("qadmin-key")||"";g&&localStorage.setItem("qadmin-key",g);var d=!1,i="",$=[],o=t=>String(t??"").replace(/[&<>"]/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[a]),h=t=>t<60?t+"\u79D2":t<3600?Math.floor(t/60)+"\u5206":Math.floor(t/3600)+"\u65F6"+Math.floor(t%3600/60)+"\u5206",y={\u5927\u5385:"lobby",\u8D77\u6B65:"mid",\u6BD4\u8D5B\u4E2D:"race",\u7ED3\u7B97:"mid"};async function c(t,a={}){let e=l?(t.includes("?")?"&":"?")+"key="+encodeURIComponent(l):"",n=await fetch(t+e,a);if(n.status===401)throw f(!1),new Error("\u53E3\u4EE4\u4E0D\u6B63\u786E");if(n.status===404)throw new Error((await n.json().catch(()=>({}))).error||"\u63A5\u53E3\u4E0D\u5B58\u5728");if(!n.ok)throw new Error("HTTP "+n.status);return n.json()}function f(t){s("login").classList.remove("hidden"),s("keyerr").classList.toggle("hidden",!t),s("key").focus()}s("enter").onclick=()=>{l=s("key").value.trim(),l&&(localStorage.setItem("qadmin-key",l),c("/api/admin/overview").then(()=>{location.replace("/admin?key="+encodeURIComponent(l))}).catch(()=>f(!0)))};s("key").onkeydown=t=>{t.key==="Enter"&&s("enter").click()};s("refresh").onclick=()=>p(!0);s("pause").onclick=()=>{d=!d,s("pause").textContent=d?"\u7EE7\u7EED":"\u6682\u505C",s("hb").className="dot"+(d?" bad":""),d||p()};function u(t){$.unshift(`${new Date().toLocaleTimeString("zh-CN",{hour12:!1})} ${t}`),$.length>40&&$.pop(),s("log").innerHTML=$.map(a=>`<div>${o(a)}</div>`).join("")}function r(t,a,e,n){return`<div class="kpi${n?" alert":""}"><div class="l">${t}</div><div class="v">${a}</div><div class="s">${e||""}</div></div>`}function w(t){let a={0:"\u5927\u5385",1:"\u8D77\u6B65",2:"\u6BD4\u8D5B\u4E2D",3:"\u7ED3\u7B97"}[t]||"\u5176\u4ED6";return`<span class="tag ${y[a]||""}">${a}</span>`}function k(t){if(s("uptime").textContent=t?h(t.server.uptime_s):"-",!t)return;s("kpis").innerHTML=[r("\u623F\u95F4",t.rooms.total,`${t.players.listed_rooms} \u4E2A\u53EF\u52A0\u5165`),r("\u5E2D\u4F4D",t.players.seats,`\u5269\u4F59 ${t.rooms.open_slots>0?t.rooms.open_slots:0} \u4E2A\u8F66\u4F4D`),r("\u5728\u7EBF",t.players.online,`\u7535\u8111 ${t.players.bots} \u53F0`),r("\u65AD\u7EBF\u5F85\u56DE\u7EBF",t.players.ghost,t.players.ghost?"\u5BBD\u9650\u671F\u5185\u53EF\u91CD\u8FDE":"\u65E0",t.players.ghost>0),r("\u8FDE\u63A5\u6570",t.net.connections,t.net.connections<t.players.online?"\u5C11\u4E8E\u5728\u7EBF\u4EBA\u6570\uFF0C\u5F02\u5E38":"\u4E0E\u5065\u5EB7"),r("\u5E73\u5747\u5EF6\u8FDF",t.net.avg_rtt+"ms",t.net.avg_rtt>180?"\u504F\u9AD8":"\u826F\u597D",t.net.avg_rtt>180),r("\u4E22\u5F03\u8F93\u5165",t.net.dropped_inputs,"\u7D2F\u8BA1",t.net.dropped_inputs>50)].join("");let a=Math.max(1,...t.maps.map(e=>e.rooms));s("maps").innerHTML=t.maps.map(e=>`<div class="maprow"><span>${o(e.name)}</span><span class="bar"><i style="width:${(e.rooms/a*100).toFixed(0)}%"></i></span><span class="n">${e.rooms}</span></div>`).join("")}function v(t){if(s("rcount").textContent=t.length,s("rnote").textContent=t.length?`\u8F66\u4F4D\u5171 ${t.length*6}\uFF0C\u5728\u5EA7 ${t.reduce((a,e)=>a+e.players,0)}`:"",!t.length){s("rooms").innerHTML='<tr><td colspan="8" class="empty">\u5F53\u524D\u6CA1\u6709\u623F\u95F4\uFF0C\u73A9\u5BB6\u8FDB\u300C\u5728\u7EBF\u5BF9\u6218\u300D\u521B\u5EFA\u5373\u53EF</td></tr>';return}s("rooms").innerHTML=t.map(a=>`<tr class="${a.code===i?"sel":""}">
+    <td><span class="code" data-code="${o(a.code)}">${o(a.code)}</span></td>
+    <td>${o(a.mapName)}</td>
+    <td>${w(a.phase)}${a.listed?' <span class="tag race">\u53EF\u52A0\u5165</span>':a.phase===0?' <span class="tag off">\u5DF2\u6EE1</span>':""}</td>
+    <td class="n">${a.online}<span style="color:var(--muted)">/${a.players}\xB7${a.cap}</span></td>
+    <td class="n">${a.laps}</td>
+    <td><span class="tag ${a.mode?"mid":""}">${a.mode?"\u9053\u5177":"\u7ADE\u901F"}</span></td>
+    <td class="n">${h(a.created_ago)}</td>
+    <td style="white-space:nowrap">
+      ${a.phase===0?`<button class="tiny" data-act="start" data-code="${o(a.code)}">\u5F00\u8D5B</button>
+      <button class="tiny" data-act="bot" data-code="${o(a.code)}">+\u7535\u8111</button>`:""}
+      <button class="tiny warn" data-act="close" data-code="${o(a.code)}">\u5173\u95ED</button>
+    </td></tr>`).join("")}function b(t){return`<span class="rowbar"><span class="bar" style="flex:1"><i style="width:${Math.min(100,t.speed/45).toFixed(0)}%"></i></span>${(t.speed*3.6).toFixed(0)}</span>`}function x(t){if(!t){s("cars").innerHTML='<tr><td colspan="10" class="empty">\u70B9\u5DE6\u4FA7\u623F\u95F4\u7801\u67E5\u770B\u6BCF\u8F86\u8F66\u5B9E\u51B5</td></tr>';return}s("dcode").textContent=t.code+" \xB7 "+t.mapName,s("dnote").textContent=t.error||"";let a=[...t.cars||[]].sort((e,n)=>(e.place||99)-(n.place||99));if(!a.length){s("cars").innerHTML='<tr><td colspan="10" class="empty">\u623F\u95F4\u6682\u65E0\u8F66\u8F86</td></tr>';return}s("cars").innerHTML=a.map(e=>`<tr>
+    <td class="n">${e.place||"-"}</td>
+    <td>${o(e.name)} ${e.bot?'<span class="tag bot">\u7535\u8111</span>':""}
+      ${e.online?"":e.ghost_left!=null?`<span class="tag off">\u6389\u7EBF ${e.ghost_left}s</span>`:'<span class="tag off">\u79BB\u7EBF</span>'}
+      ${e.auto?'<span class="tag mid">\u6258\u7BA1</span>':""}
+      ${e.finished?'<span class="tag race">\u5B8C\u8D5B</span>':""}</td>
+    <td class="n">${b(e)}</td>
+    <td class="n">${(e.progress/10).toFixed(0)}%</td>
+    <td class="n">${Math.min(e.lap,t.laps)}/${t.laps}</td>
+    <td class="n">${e.best_lap!=null?e.best_lap.toFixed(2):"-"}</td>
+    <td class="n">${e.rtt!=null?e.rtt+"ms":"-"}</td>
+    <td class="n">${e.pending}</td>
+    <td class="n">${e.dropped}</td>
+    <td style="white-space:nowrap">${e.seat_token?`<button class="tiny warn" data-act="kick" data-code="${o(t.code)}" data-token="${o(e.seat_token)}">\u8BF7\u79BB</button>`:""}</td>
+  </tr>`).join("")}async function p(t){if(!(d&&!t))try{let[a,e]=await Promise.all([c("/api/admin/overview"),c("/api/admin/rooms")]);k(a),v(e.rooms),s("hb").className="dot",s("hbtext").textContent="\u670D\u52A1\u6B63\u5E38",i&&x(await c("/api/admin/rooms/"+i))}catch(a){s("hb").className="dot bad",s("hbtext").textContent="\u5DF2\u65AD\u5F00",String(a.message)!=="\u53E3\u4EE4\u4E0D\u6B63\u786E"&&u("\u5237\u65B0\u5931\u8D25\uFF1A"+a.message)}}async function _(t,a,e){let n={close:`\u5173\u95ED\u623F\u95F4 ${t}\uFF1F\u5728\u573A\u73A9\u5BB6\u4F1A\u7ACB\u523B\u6389\u7EBF\u3002`,start:`\u5F3A\u5236\u5F00\u59CB ${t}\uFF1F\u672A\u51C6\u5907\u7684\u73A9\u5BB6\u4E5F\u4F1A\u88AB\u653E\u8FDB\u53BB\u3002`,bot:`\u7ED9 ${t} \u8865\u4E00\u53F0\u7535\u8111\u3002`,kick:`\u8BF7\u79BB ${t} \u7684\u8FD9\u4E2A\u5E2D\u4F4D\uFF1F`};if(confirm(n[a]||"\u786E\u8BA4\u64CD\u4F5C\uFF1F"))try{let m=e?JSON.stringify({token:e}):"{}";await c(`/api/admin/rooms/${t}/${a}`,{method:"POST",headers:{"content-type":"application/json"},body:m}),u(`${a} \xB7 ${t} \u5B8C\u6210`),await p(!0)}catch(m){u(`${a} ${t} \u5931\u8D25\uFF1A${m.message}`),alert("\u64CD\u4F5C\u5931\u8D25\uFF1A"+m.message)}}document.addEventListener("click",t=>{let a=t.target.closest("[data-act],[data-code]");if(a){if(a.dataset.act){_(a.dataset.code,a.dataset.act,a.dataset.token);return}i=a.dataset.code===i?"":a.dataset.code,u(i?"\u67E5\u770B\u623F\u95F4 "+i:"\u53D6\u6D88\u67E5\u770B"),p(!0)}});(async()=>{try{await c("/api/admin/overview"),s("login").classList.add("hidden")}catch{f(!1);return}p(),setInterval(p,2e3)})();})();
+</script>
+</body>
+</html>

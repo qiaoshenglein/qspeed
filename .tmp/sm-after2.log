@@ -1,0 +1,11 @@
+PASS 采到了足够帧 · 本车 525 帧 / 他车 525 帧 · 服务器 tick 1554
+本车渲染轨迹: {"frames":525,"meanJerk":0.0156,"maxJerk":0.137,"reversals":0,"spikes":0,"meanStep":0.87,"maxStep":1.32,"ratio":1.52}
+他车渲染轨迹: {"frames":525,"meanJerk":0.0419,"maxJerk":0.08,"reversals":0,"spikes":0,"meanStep":0.78,"maxStep":1.01,"ratio":1.29}
+PASS 本车无单帧位移突刺(>3 帧步长) · 突刺 0 帧 / 最大单帧 1.32m
+PASS 本车平均抖动足够小 · meanJerk 0.0156 · max 0.137
+PASS 本车方向不反复 · 反转 0 帧
+PASS 他车无单帧位移突刺 · 突刺 0 帧 / 最大单帧 1.01m
+PASS 他车平均抖动足够小 · meanJerk 0.0419 · max 0.08
+PASS 他车方向不反复 · 反转 0 帧
+
+结果：7 通过 / 0 失败
