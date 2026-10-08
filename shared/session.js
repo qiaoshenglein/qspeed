@@ -5,15 +5,24 @@ import { DT, DT_MS, EDGE_BITS, HOLD_BITS, applyHit } from './race.js';
 import {
   C, S, PHASE, Writer, Reader, decodeSnapshot, decodeEvents, decodeRoster, decodeResult, F,
 } from './proto.js';
-import { damp, clamp, wrapAngle } from './util.js';
+import { damp, dampAngle, clamp, wrapAngle } from './util.js';
 
 const HIST = 512; // 本车输入历史（tick -> [hold, edge]）
 export const INTERP_DELAY_MS = 110; // 他车渲染延迟
 export const INTERP_DELAY_TICKS = INTERP_DELAY_MS / DT_MS; // 同一延迟，用服务器 tick 表示
 const INTERP_BUF = 8; // 他车状态环形缓冲：要能覆盖 延迟/快照间隔 + 抖动余量
 const SEND_EVERY_MS = 16; // 输入上行节流
-const RESYNC_TICKS = 240; // ackTick 偏离过大时硬对齐
 const MAX_RECONNECTS = 6; // 自动回线尝试次数
+// 对账修正的偿还方式分两级，这是"高延迟会不会看见瞬移"的分水岭：
+//  · 网络慢造成的偏差（实测 400ms 峰值约 2m）：按限额速度滑回去。幅度不设门限，
+//    因为领先量随延迟线性增长，任何固定幅度门限都会被顶破，而顶破的那一帧就是瞬移。
+//  · 本端整段时间根本没过帧（切后台、页面挂起、弱机 1fps）：物理位姿已经跑出几十米，
+//    滑过去等于让镜头以几十米每秒横掠半条赛道——那才是最强烈的晕 3D 诱因。
+//    这种情况一次性切镜头（车与相机同时到位），是"你不在场"，不是"网络差"。
+const MAX_LAT = 9;      // 滑行时视觉横移最快 9 m/s
+const MAX_YAW = 3.0;    // 滑行时视觉朝向最快 3 rad/s
+const MAX_PAY_MS = 0.9; // 再大的滑行偏差也要在 0.9s 内偿清，否则车会长时间漂在物理位置之外
+const CUT_DIST = 20;    // 超过这个偏差判定为"整段丢失"，直接切镜头（稳定态实测峰值 2m，够不到）
 
 export function frameOf(bits, edge) {
   return {
@@ -43,6 +52,7 @@ export class NetCore {
     this.reconT = null;
     this.disposing = false;
     this.resync = false; // 回线后需要先把本车对齐到服务器位置
+    this.lastAck = 0; // 最近一份快照的权威 tick（本端领先量的基准）
     this.url = opts.url || defaultWsUrl();
 
     this.tick = 0; // 本客户端 tick 空间
@@ -67,7 +77,7 @@ export class NetCore {
     this.maxErr = 0;
     this.visual = { x: 0, z: 0, h: 0, t: 0, dur: 0.15 };
     this.tickClock = null; // 本地自由推进的服务器 tick 时钟（不受快照成帧影响）
-    this.hardSnap = false; // 修正过大时不滑行，交给相机重定位
+    this.hardSnap = false; // 仅由 setVisual 在"整段丢失"级别的大偏差上置位，相机同帧重定位
     this.snapHz = 0;
     this.grid = 6;
     this.laps = opts.laps || 2;
@@ -213,54 +223,53 @@ export class NetCore {
   rosterFor(carId) { return this.roster.find((x) => x.carId === carId); }
 
   // ---------- 本车对账 ----------
-  // 快照描述的是 ackTick 那一刻的权威状态；把它与本地当时记录的历史比对，
-  // 预测正确就不回滚（否则每个快照都要重放几十 tick）。
+  // 快照描述的是 ackTick 那一刻的权威状态。本端领先 ackTick 约 2×单程延迟（输入要一个来回
+  // 才拿到确认），这是正常量，不是异常：正确做法是"回到 ack 的权威状态，把 ack+1..当前 的
+  // 本地输入整段重放"，让本端仍站在当前 tick 上。
+  // 早先的实现把领先量截断成固定 24 tick 并把 tick 时钟拽回 ack，等于每来一个快照就丢掉
+  // (领先量-24) tick 的位移：240ms 约 3.5m、400ms 约 10m，直接顶破 8m 硬跳门限 → 高延迟瞬移。
   reconcile(rec) {
     if (!this.me) return;
     const ack = rec.ackTick;
     if (ack <= 0) return;
-    if (Math.abs(ack - this.tick) > RESYNC_TICKS) this.tick = ack;
+    this.lastAck = ack;
     if (ack > this.tick) {
-      // 本端仿真落后于服务器（低帧率/后台节流）：直接快进到权威状态，不能拿旧环形缓冲比对
-      this.tick = ack;
-      this.restoreAuthoritative(rec);
+      // 本端仿真落后于服务器（低帧率/页面挂起）：拿旧环形缓冲比对没有意义。
+      // 小段落后用滑行吸收，超过 100ms 就直接重新锚定，别把上百米的路一次性滑过去。
+      if (ack - this.tick > 12) this.reanchor(ack, rec);
+      else { this.tick = ack; this.restoreAuthoritative(rec); }
       return;
     }
-    if (this.tick - ack > 24) {
-      // 本端跑到了服务器前面（长卡顿后 dt 一次性补太多）：退回到权威 tick，
-      // 否则这些"未来 tick"的输入会溢出服务器输入队列（上限 96），造成真实分歧
-      const px = this.me.x, pz = this.me.z, ph = this.me.h;
-      this.tick = ack;
-      this.applyAuthoritative(rec);
-      // 回放本端已模拟过的 tick：预测对的部分不浪费，错的部分由下面的偏移滑回来
-      for (let t = ack + 1; t <= this.tick + 24; t++) {
-        const hh = this.hist[this.slot(t)];
-        if (!hh) break;
-        this.me.update(DT, frameOf(hh.bits, hh.edge), true, this.itemMode);
-      }
-      this.setVisual(px - this.me.x, pz - this.me.z, wrapAngle(ph - this.me.h));
-      this.rolls++;
-      return;
-    }
+    const gap = this.tick - ack;
+    if (gap >= HIST - 8) { this.reanchor(ack, rec); return; } // 超出可重放范围，见 reanchor
     const h = this.hist[this.slot(ack)];
-    if (!h) { this.restoreAuthoritative(rec); return; } // 历史已被覆盖
-    if (h.k) {
-      const err = Math.hypot(rec.x - h.k[0], rec.z - h.k[1]);
-      const serr = Math.abs(rec.s - h.k[5]);
-      if (ack < this.tick - 2) this.maxErr = Math.max(this.maxErr, err);
-      if (err < 0.08 && serr < 0.8) return; // 预测与权威一致
-      this.rolls++;
-      const px = this.me.x, pz = this.me.z, ph = this.me.h;
-      this.applyAuthoritative(rec);
-      for (let t = ack + 1; t <= this.tick; t++) {
-        const hh = this.hist[this.slot(t)];
-        if (!hh) break;
-        this.me.update(DT, frameOf(hh.bits, hh.edge), true, this.itemMode);
-      }
-      this.setVisual(px - this.me.x, pz - this.me.z, wrapAngle(ph - this.me.h));
-    } else {
-      this.restoreAuthoritative(rec);
+    if (!h || h.t !== ack || !h.k) { this.restoreAuthoritative(rec); return; } // 历史已被覆盖
+    const err = Math.hypot(rec.x - h.k[0], rec.z - h.k[1]);
+    const serr = Math.abs(rec.s - h.k[5]);
+    if (gap > 2) this.maxErr = Math.max(this.maxErr, err);
+    if (err < 0.08 && serr < 0.8) return; // 预测与权威一致
+    this.rolls++;
+    const px = this.me.x, pz = this.me.z, ph = this.me.h;
+    this.applyAuthoritative(rec);
+    for (let t = ack + 1; t <= this.tick; t++) {
+      const hh = this.hist[this.slot(t)];
+      if (!hh || hh.t !== t) break;
+      this.me.update(DT, frameOf(hh.bits, hh.edge), true, this.itemMode);
     }
+    this.setVisual(px - this.me.x, pz - this.me.z, wrapAngle(ph - this.me.h));
+  }
+
+  // 本端 tick 与服务器脱出可重放范围（服务器卡顿跑不满 120Hz、或本端长时间挂起）：
+  // 未发送的未来输入作废，本车直接站到权威位姿。注意这只复位"本端的 tick 轴"——
+  // 服务器的 tick 轴没有变，所以他车缓冲与渲染时钟必须原地保留：清掉缓冲会让所有对手
+  // 先定身、再在下一份快照到达时整段跳过来，等于把本车的一次纠偏扩散成全场玩家的瞬移。
+  // 本车偏差交给 setVisual 的两级偿还：网络差就滑，整段没跑帧就切。
+  reanchor(ack, rec) {
+    this.tick = ack;
+    this.pending.length = 0;
+    const px = this.me.x, pz = this.me.z, ph = this.me.h;
+    this.applyAuthoritative(rec);
+    this.setVisual(px - this.me.x, pz - this.me.z, wrapAngle(ph - this.me.h));
   }
 
   // 本车被权威结算命中：冲击先在本端同样生效（否则本地预测会一直跑在服务器前面），
@@ -306,7 +315,10 @@ export class NetCore {
     // 时钟与偏移衰减按真实经过时间推进，即使这一帧物理一个子步都没跑（高帧率时会出现）
     this.advanceClock(dtC * 1000);
     this.decayVisual(dtC);
-    this.acc += dtC;
+    // 本端 tick 不能无限领先服务器：服务器的输入队列只有 96 tick 的窗口，超出的输入会被丢弃，
+    // 于是权威端在"无人驾驶"地跑，两边真的分叉，最后只能靠硬跳收场。
+    // 领先过头就先放慢本地仿真让服务器追上——慢半拍的车，好过凭空瞬移的车。
+    this.acc += dtC * this.leadPace();
     let n = 0;
     while (this.acc >= DT && n < 60) {
       this.acc -= DT;
@@ -321,7 +333,7 @@ export class NetCore {
       this.tick++;
       if (active && this.me) {
         this.me.update(DT, frameOf(bits, edge), true, this.itemMode);
-        this.hist[this.slot(this.tick)] = { bits, edge, k: [this.me.x, this.me.z, this.me.y, this.me.h, this.me.m, this.me.s] };
+        this.hist[this.slot(this.tick)] = { t: this.tick, bits, edge, k: [this.me.x, this.me.z, this.me.y, this.me.h, this.me.m, this.me.s] };
         this.pending.push([this.tick, bits, edge]);
       }
     }
@@ -342,16 +354,40 @@ export class NetCore {
     this.tickClock += (dtMs / DT_MS) * rate;
   }
 
+  // 本端 tick 相对权威 tick 的领先量：正常就是一个往返 + 余量。
+  // 超出说明服务器没跟上当日时（卡顿/房间过多），按比例放慢本地仿真让它追上来。
+  leadPace() {
+    if (!this.aligned || !this.lastAck) return 1;
+    const want = 2 * (this.rtt / 1000) / DT + 8;
+    const lead = this.tick - this.lastAck;
+    if (lead <= want) return 1;
+    return clamp(want / lead, 0.4, 1);
+  }
+
   renderTick() {
     return (this.tickClock === null ? this.worldTick : this.tickClock) - INTERP_DELAY_TICKS;
   }
 
   // ---------- 对账修正的视觉吸收 ----------
+  // 修正是叠加的：新修正必须接上上一笔尚未衰减完的偏移，否则这一帧会把旧偏移凭空抹掉，
+  // 渲染位姿当场跳掉——快照 20Hz、衰减 0.25s，意味着每笔修正都只走完约 40% 就被下一笔覆盖。
   setVisual(dx, dz, dh) {
+    const v = this.visual;
+    if (v.t > 0) { dx += v.x; dz += v.z; dh += v.h; }
     const d = Math.hypot(dx, dz);
-    if (d < 0.05 && Math.abs(dh) < 0.015) return;
-    if (d > 8) { this.visual = { x: 0, z: 0, h: 0, t: 0, dur: 0.15 }; this.hardSnap = true; return; }
-    this.visual = { x: dx, z: dz, h: dh, t: 1, dur: clamp(0.11 + d * 0.035, 0.11, 0.4) };
+    const ad = Math.abs(dh);
+    if (d < 0.05 && ad < 0.015) return;
+    if (d > CUT_DIST) { // 整段丢失：一次切到位，交给相机同步重定位，不做长距离横扫
+      this.visual = { x: 0, z: 0, h: 0, t: 0, dur: 0.15 };
+      this.hardSnap = true;
+      return;
+    }
+    // 时长由"最大偏差 / 允许的最快偿还速度"给出：偏差越大滑得越久，滑速恒定，
+    // 所以无论延迟多高，单帧的视觉横移与转向都不会超过这个上限
+    this.visual = {
+      x: dx, z: dz, h: dh, t: 1,
+      dur: clamp(Math.max(d / MAX_LAT, ad / MAX_YAW), 0.12, MAX_PAY_MS),
+    };
   }
 
   decayVisual(dtS) {
@@ -372,6 +408,9 @@ export class NetCore {
     c.rx = c.x + v.x * k;
     c.rz = c.z + v.z * k;
     c.rh = c.h + v.h * k;
+    // 相机航向的目标是"行驶朝向" m，它每份快照都会被权威值整份覆盖。
+    // 这里给它同一套衰减，相机就不会吃到 m 的阶跃（漂移结束时 m 会一次转掉十几度）。
+    c.rm = c.rm === undefined ? c.m : dampAngle(c.rm, c.m, 10, dtS);
     return c;
   }
 

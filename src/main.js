@@ -839,10 +839,12 @@ class Game {
       if (net.resync) {
         // 回线/被权威冲击后本地预测作废：摆回权威位置，差值由视觉偏移滑形吸收
         const rec = snap.racers.find((x) => x.carId === net.myCarId);
-        if (rec) { net.restoreAuthoritative(rec); net.resync = false; net.syncPose(0.016); }
+        if (rec) { net.restoreAuthoritative(rec); net.resync = false; net.syncPose(vdt); }
       }
       if (net.hardSnap) {
-        // 修正大到滑行都藏不住（重连、被顶飞的余波）：直接重定位，别让相机追着跑
+        // 本端整段时间没过帧（切后台/挂起/弱机 1fps）：位姿偏差是几十米量级，
+        // 滑行会让镜头以几十米每秒横扫赛道，那才是最直接的 3D 眩晕诱因。
+        // 这里一次性把车与相机同时摆到位——一次干净的剪辑，好过一段横扫。
         net.hardSnap = false;
         this.camYaw = this.player.rh ?? this.player.h;
         this.snapCamera();
@@ -1488,8 +1490,10 @@ class Game {
       { dist: 5.2, h: 1.9, look: 8, lookH: 1.1 },
     ];
     const m = modes[this.camMode];
-    // 漂移时相机跟随速度方向，能看到车身侧滑
-    const yawT = P.s >= 0 ? P.m + wrapAngle(ph - P.m) * 0.35 : ph;
+    // 漂移时相机跟随速度方向，能看到车身侧滑。用 NetCore 衰减过的 rm 而不是裸 m：
+    // m 每份快照都会被权威值整份覆盖，直接吃它就会在纠偏那一刻甩头
+    const md = P.rm ?? P.m;
+    const yawT = P.s >= 0 ? md + wrapAngle(ph - md) * 0.35 : ph;
     this.camYaw = dampAngle(this.camYaw, yawT, P.drifting ? 4.5 : 7, dt);
     const boostPull = P.nitroTime > 0 ? 1.6 : P.smallBoost > 0 ? 0.8 : 0;
     const dist = m.dist + Math.abs(P.s) * 0.018 + boostPull;

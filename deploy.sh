@@ -92,6 +92,13 @@ do_smoke() {
     fails=$((fails + 1))
     say "  ✗ net-race(道具) 失败，或 ITEM=1 没生效（跑出的是竞速用例）"
   fi
+  # 高延迟瞬移门禁：只跑 240/400ms 两档、每档 3 秒，控制在半分钟以内
+  if out="$(GATE=1 ONLY=240,400 MEASURE_MS=3000 "$BUN_BIN" test/high-latency.mjs 2>&1 | tr -d '\000')"; then
+    say "  ✓ 高延迟瞬移 $(printf '%s' "$out" | grep -cE '^PASS') 档无可感知瞬移"
+  else
+    fails=$((fails + 1))
+    printf '%s\n' "$out" | grep -E '^(FAIL|结果)' | head -6
+  fi
   [ "$fails" -eq 0 ] || die "回归未通过（$fails 个用例失败），已阻止启动"
   say "  ✓ 全绿"
 }

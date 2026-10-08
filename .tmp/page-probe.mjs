@@ -1,0 +1,21 @@
+import { chromium } from 'playwright-core';
+import { startDelayProxy } from '../test/ws-delay.mjs';
+const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+await Bun.write('.tmp/pp2-port', '');
+const child = Bun.spawn([process.execPath, 'server/index.js'], { env: { ...process.env, PORT: '0', NET_PORT_FILE: '.tmp/pp2-port' }, stdout: 'ignore', stderr: 'ignore' });
+let sport = 0;
+for (let i = 0; i < 60 && !sport; i++) { const s = (await Bun.file('.tmp/pp2-port').text()).trim(); if (s) sport = +s; else await Bun.sleep(50); }
+const p = startDelayProxy(`ws://localhost:${sport}/ws`, { upMs: 5, downMs: 5, jitterMs: 0, seed: 1 });
+const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--mute-audio', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await browser.newPage({ viewport: { width: 800, height: 460 } });
+const msgs = [];
+page.on('pageerror', (e) => msgs.push('pageerror: ' + String(e.message).slice(0, 200)));
+page.on('console', (m) => msgs.push(m.type() + ': ' + m.text().slice(0, 160)));
+page.on('requestfailed', (r) => msgs.push('reqfail: ' + r.url().slice(0, 60) + ' ' + (r.failure()?.errorText || '')));
+const t0 = Date.now();
+await page.goto(`http://localhost:${p.port}/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+console.log('domcontentloaded', Date.now() - t0, 'ms');
+await page.waitForTimeout(15000);
+console.log('状态:', JSON.stringify(await page.evaluate(() => ({ game: typeof window.game, track: !!(window.game && window.game.track), canvas: !!document.querySelector('canvas'), scripts: document.scripts.length, bodyLen: document.body ? document.body.innerHTML.length : -1 }))));
+console.log('消息:', msgs.slice(0, 8).join(' | ') || '无');
+await browser.close(); p.close(); child.kill(); process.exit(0);

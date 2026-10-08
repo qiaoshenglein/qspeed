@@ -8,6 +8,7 @@
     "dev": "bun build.mjs --dev",
     "serve": "bun server/index.js",
     "test:net": "bun test/race-unit.mjs && bun test/items-unit.mjs && bun test/net-race.mjs && ITEM=1 bun test/net-race.mjs && bun test/rooms-reconnect.mjs && bun test/reconnect-core.mjs && bun test/smoothness.mjs && bun test/admin-api.mjs",
+    "test:latency": "GATE=1 ONLY=240,400 MEASURE_MS=3000 bun test/high-latency.mjs",
     "test:browser": "bun test/browser-smoke.mjs && bun test/browser-online.mjs",
     "deploy": "wrangler deploy",
     "preview": "wrangler dev",
