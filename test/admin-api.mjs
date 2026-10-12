@@ -1,5 +1,6 @@
 // 后台运维台（A 层）：口令鉴权 + 实况只读 + 干预操作，全部走真 HTTP/WS
 import { C, S, PHASE, Writer, Reader } from '../shared/proto.js';
+import { RtcSock, signUrl } from './rtc-node.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -75,10 +76,11 @@ class Cli {
     this.opts = { name: '车手', skin: 1, map: 'city', laps: 2, mode: 0, diff: 1, code: '', create: 0, token: '', ...over };
     this.welcome = null;
     this.roster = null;
-    this.ws = new WebSocket(`ws://localhost:${port}/ws`);
-    this.ws.binaryType = 'arraybuffer';
-    this.opened = new Promise((res) => { this.ws.onopen = res; });
-    this.ws.onmessage = (e) => this.onMsg(new Uint8Array(e.data));
+    this.sock = new RtcSock(port);
+    this.sock.onMessage = (b) => this.onMsg(b);
+    this.opened = this.sock.opened;
+    this.ka = setInterval(() => { this.sock.send(new Uint8Array([C.PING, 0, 0, 0, 1])); }, 1000);
+    this.ka.unref?.();
   }
   onMsg(b) {
     const r = new Reader(b);
@@ -96,13 +98,13 @@ class Cli {
   }
   async ready(on = true) {
     await this.opened;
-    this.ws.send(helloBytes(this.opts));
+    this.sock.send(helloBytes(this.opts));
     for (let i = 0; i < 60 && !this.welcome; i++) await Bun.sleep(50);
     const w = new Writer(4); w.u8(C.READY).u8(on ? 1 : 0);
-    this.ws.send(w.bytes());
+    this.sock.send(w.bytes());
     return this.welcome;
   }
-  close() { try { this.ws.close(); } catch {} }
+  close() { try { this.sock.close(); } catch {} }
 }
 
 const ca = new Cli({ create: 1, name: '甲' });

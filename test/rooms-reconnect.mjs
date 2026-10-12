@@ -1,5 +1,6 @@
 // 房间列表 + 断线重连：真服务器、真 WebSocket，验证席位令牌与公开列表语义
 import { C, S, PHASE, Writer, Reader, decodeRoster, decodeSnapshot } from '../shared/proto.js';
+import { RtcSock, signUrl } from './rtc-node.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -21,7 +22,7 @@ while (Date.now() - t0 < 8000) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v1') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -45,12 +46,13 @@ class Cli {
     this.phase = -1;
     this.err = '';
     this.raw = [];
-    this.ws = new WebSocket(`ws://localhost:${port}/ws`);
-    this.ws.binaryType = 'arraybuffer';
-    this.opened = new Promise((res) => { this.ws.onopen = res; });
-    this.ws.onmessage = (e) => this.onMsg(e.data);
-    this.closed = new Promise((res) => { this.closedResolve = res; });
-    this.ws.onclose = () => this.closedResolve();
+    this.sock = new RtcSock(port);
+    this.sock.onMessage = (b) => this.onMsg(b);
+    this.opened = this.sock.opened;
+    this.closed = this.sock.closed;
+    // 真实客户端每秒 PING 一次（服务端据此判活），测试端也要照做
+    this.ka = setInterval(() => { this.sock.send(new Uint8Array([C.PING, 0, 0, 0, 1])); }, 1000);
+    this.ka.unref?.();
   }
   onMsg(buf) {
     const b = new Uint8Array(buf);
@@ -77,7 +79,7 @@ class Cli {
   }
   async send(bytes) {
     await this.opened;
-    this.ws.send(bytes);
+    this.sock.send(bytes);
   }
   hello(over) { Object.assign(this.opts, over); return this.send(helloBytes(this.opts)); }
   ready(on = true) { return this.send(readyBytes(on)); }
@@ -89,7 +91,7 @@ class Cli {
     }
     return false;
   }
-  kill() { try { this.ws.close(); } catch { /* 已断 */ } }
+  kill() { try { this.sock.close(); } catch { /* 已断 */ } }
 }
 
 const rooms = async () => (await (await fetch(`http://localhost:${port}/rooms`)).json()).rooms;

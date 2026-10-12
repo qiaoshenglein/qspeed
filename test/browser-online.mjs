@@ -29,7 +29,7 @@ while (Date.now() - t0 < 8000) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v1') { console.log('FAIL 端口被旧进程占用', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 端口被旧进程占用', health); process.exit(1); }
 const base = `http://localhost:${port}/`;
 
 const ITEM = process.env.ITEM === '1';

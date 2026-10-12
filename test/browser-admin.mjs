@@ -1,5 +1,6 @@
 // 运维台页面目视/交互验收：真浏览器打开 /admin，验证登录、KPI、房间表、点选实况、加电脑
 import { chromium } from 'playwright-core';
+import { RtcSock } from './rtc-node.mjs';
 import { C, S, Writer, Reader } from '../shared/proto.js';
 import { fileURLToPath } from 'node:url';
 
@@ -29,19 +30,18 @@ function hello(o) {
   return w.bytes();
 }
 function openCli(o) {
-  const ws = new WebSocket(`ws://localhost:${port}/ws`);
-  ws.binaryType = 'arraybuffer';
-  const c = { ws, code: '', token: '' };
-  c.opened = new Promise((res) => { ws.onopen = res; });
-  ws.onmessage = (e) => {
-    const r = new Reader(new Uint8Array(e.data));
+  const sock = new RtcSock(port);
+  const c = { sock, code: '', token: '' };
+  c.opened = sock.opened;
+  sock.onMessage = (bytes) => {
+    const r = new Reader(bytes);
     if (r.u8() !== S.WELCOME) return;
     r.u16(); c.code = r.str(); r.str(); r.u8(); r.u8(); r.u8(); r.u32(); r.u32(); r.u8(); r.u8();
     if (!r.eof) r.u32();
     c.token = r.str();
     c.got = true;
   };
-  c.start = async () => { await c.opened; ws.send(hello(o)); for (let i = 0; i < 60 && !c.got; i++) await Bun.sleep(50); return c; };
+  c.start = async () => { await c.opened; sock.send(hello(o)); for (let i = 0; i < 60 && !c.got; i++) await Bun.sleep(50); return c; };
   return c;
 }
 const c1 = await openCli({ name: '甲', skin: 1, map: 'sunset', laps: 2, mode: 0, diff: 1, create: 1 }).start();
@@ -110,7 +110,7 @@ await ctx2.close();
 ok('页面脚本无报错', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await browser.close();
-c1.ws.close(); c2.ws.close();
+c1.sock.close(); c2.sock.close();
 child.kill();
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 process.exit(fail ? 1 : 0);

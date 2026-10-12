@@ -23,7 +23,8 @@
   "type": "module",
   "dependencies": {
     "esbuild": "^0.28.2",
-    "three": "^0.169.0"
+    "three": "^0.169.0",
+    "werift": "^0.25.0"
   },
   "private": true,
   "devDependencies": {

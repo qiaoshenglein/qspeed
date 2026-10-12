@@ -2,7 +2,8 @@
 // 竞速与道具两种模式都过一遍。上一轮只量了本车模型的位姿（Node 环境、只有竞速），
 // 结论比用户的实际体验窄，所以才会出现"指标全绿但玩家仍然看到瞬移"。
 import { chromium } from 'playwright-core';
-import { startDelayProxy } from './ws-delay.mjs';
+import { spawnLink } from './rtc-link.mjs';
+import { signUrl } from './rtc-node.mjs';
 import { NetCore } from '../shared/session.js';
 import { PlayerCar } from '../shared/vehicle.js';
 import { stubModel, placeOnGrid } from '../shared/race.js';
@@ -31,14 +32,17 @@ for (let i = 0; i < 100 && !sport; i++) {
   if (s) sport = Number(s); else await Bun.sleep(50);
 }
 if (!sport) { console.log('FAIL 服务器未启动'); process.exit(1); }
-const proxy = startDelayProxy(`ws://localhost:${sport}/ws`, { upMs: RTT / 2, downMs: RTT / 2, jitterMs: JITTER, seed: 99 });
-const base = `http://localhost:${proxy.port}/`;
+const proxy = await spawnLink({
+  sign: signUrl(sport), http: `http://localhost:${sport}`, upMs: RTT / 2, downMs: RTT / 2, jitterMs: JITTER, seed: 99,
+});
+const base = proxy.base;
 
 const browser = await chromium.launch({
   executablePath: CHROME, headless: true,
   // 不加这三个，headless 里 rAF 会被压到 ~0.5fps（实测 9 秒只出 5 帧），逐帧采样就没有意义
   args: ['--mute-audio', '--autoplay-policy=no-user-gesture-required', '--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-    '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
+    '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+    '--disable-dev-shm-usage', '--disable-extensions'],
 });
 const errors = [];
 async function newPage(tag) {
@@ -158,7 +162,7 @@ try {
 } finally {
   await browser.close().catch(() => {});
   if (nodeB) { clearInterval(nodeB.timer); nodeB.net.dispose(); }
-  proxy.close();
+  await proxy.close();
   child.kill();
 }
 

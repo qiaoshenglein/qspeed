@@ -28,7 +28,7 @@ export class Room {
     this.createdAt = Date.now();
     this.startedAt = Date.now();
     this.seats = new Map(); // token -> member
-    this.members = new Map(); // ws -> member（只存在于线连接）
+    this.members = new Map(); // 连接句柄 -> member（只存在于线连接；句柄是 server/rtc.js 的 Peer）
     this.phase = PHASE.lobby;
     this.timer = null;
     this.acc = 0;

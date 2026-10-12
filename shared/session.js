@@ -6,6 +6,7 @@ import {
   C, S, PHASE, Writer, Reader, decodeSnapshot, decodeEvents, decodeRoster, decodeResult, F,
 } from './proto.js';
 import { damp, dampAngle, clamp, wrapAngle } from './util.js';
+import { rtcTransport } from './transport.js';
 
 const HIST = 512; // 本车输入历史（tick -> [hold, edge]）
 export const INTERP_DELAY_MS = 110; // 他车渲染延迟
@@ -53,7 +54,7 @@ export class NetCore {
     this.disposing = false;
     this.resync = false; // 回线后需要先把本车对齐到服务器位置
     this.lastAck = 0; // 最近一份快照的权威 tick（本端领先量的基准）
-    this.url = opts.url || defaultWsUrl();
+    this.url = opts.url || defaultSignUrl();
 
     this.tick = 0; // 本客户端 tick 空间
     this.worldTick = 0; // 服务器比赛 tick（用于计时）
@@ -90,12 +91,19 @@ export class NetCore {
   }
 
   connect() {
-    this.ws = new WebSocket(this.url);
-    this.ws.binaryType = 'arraybuffer';
-    this.ws.onopen = () => { this.connected = true; this.hello(); };
-    this.ws.onmessage = (e) => this.onMsg(e.data);
-    this.ws.onclose = () => { this.connected = false; this.retry(); };
-    this.ws.onerror = () => { this.connected = false; };
+    // 传输层可替换：浏览器走原生 RTCPeerConnection，测试里注入同一个实现
+    const open = this.opts.openTransport || rtcTransport;
+    const t = open(this.url, this.opts.transport || {});
+    this.t = t;
+    t.onOpen = () => { this.connected = true; this.hello(); };
+    t.onMessage = (b) => this.onMsg(b);
+    t.onClose = () => { if (this.disposing) return; this.connected = false; this.retry(); };
+    t.onError = () => { this.connected = false; };
+    // 保活与 RTT 采样都不能挂在渲染循环上：大厅里没人跑 step，
+    // 而 UDP 的 NAT 映射大约 30~60 秒就过期——静默的对手会在回线之前先被网络自己丢掉。
+    clearInterval(this.kaT);
+    this.kaT = setInterval(() => { if (this.connected) this.ping(); }, 1000);
+    this.kaT.unref?.();
   }
 
   // 断线自动回线：同一令牌找回原席位；超过次数就交给人工
@@ -123,10 +131,7 @@ export class NetCore {
 
   ping() { const w = new Writer(8); w.u8(C.PING).u32(Date.now() & 0xffffffff); this.raw(w.bytes()); }
 
-  raw(bytes) {
-    if (this.ws && this.ws.readyState === 1) { this.ws.send(bytes); return; }
-    if (this.ws && this.ws.readyState === 0) this.ws.addEventListener('open', () => this.ws.send(bytes), { once: true });
-  }
+  raw(bytes) { this.t?.send(bytes); }
 
   onMsg(buf) {
     const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -468,17 +473,19 @@ export class NetCore {
 
   dispose() {
     this.disposing = true;
+    clearInterval(this.kaT);
     clearTimeout(this.reconT);
-    try { this.ws?.close(); } catch { /* 已关闭 */ }
+    try { this.t?.close(); } catch { /* 已关闭 */ }
   }
 }
 
 function noop() {}
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-function defaultWsUrl() {
-  if (typeof location === 'undefined') return 'ws://localhost:8790/ws';
-  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+// 信令只有一次 HTTP POST，之后的比赛数据全部走 UDP 上的数据通道
+function defaultSignUrl() {
+  if (typeof location === 'undefined') return 'http://localhost:8790/rtc/offer';
+  return `${location.protocol}//${location.host}/rtc/offer`;
 }
 
 export { PHASE, PlayerCar };

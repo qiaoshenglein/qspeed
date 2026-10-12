@@ -1,5 +1,6 @@
 // 客户端栈（NetCore）自动回线：断线后应凭席位令牌重连、找回同一车位并续上快照
 import { NetCore } from '../shared/session.js';
+import { signUrl } from './rtc-node.mjs';
 import { PlayerCar } from '../shared/vehicle.js';
 import { stubModel, placeOnGrid } from '../shared/race.js';
 import { TrackSim } from '../shared/trackCore.js';
@@ -23,7 +24,7 @@ while (Date.now() - t0 < 8000) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v1') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = '') => { c ? (pass++, console.log(`PASS ${n}${x ? ' · ' + x : ''}`)) : (fail++, console.log(`FAIL ${n}${x ? ' · ' + x : ''}`)); };
@@ -34,7 +35,7 @@ function makeClient(name, over = {}) {
   const car = new PlayerCar(track, stubModel(), name);
   placeOnGrid(car, 0);
   const net = new NetCore({
-    url: `ws://localhost:${port}/ws`, name, skin: 0, map: 'city', laps: 2, mode: 0, diff: 1,
+    url: signUrl(port), name, skin: 0, map: 'city', laps: 2, mode: 0, diff: 1,
     code: '', create: true, track, ownCar: car, ...over,
   });
   net.events = [];
@@ -65,7 +66,7 @@ ok('全员准备后自动开赛并持续收快照', a.phase >= 2 && a.snapCount 
 
 // 断线 → 客户端自动回线
 const before = a.snapCount;
-a.ws.close();
+a.t.close(); // 传输层句柄：断开一条 RTC 连接
 for (let i = 0; i < 20 && !(a.connected && a.snapCount > before + 10); i++) await Bun.sleep(300);
 const rec = a.lastSnap ? a.lastSnap.racers.find((r) => r.carId === a.myCarId) : null;
 const derr = rec ? Math.hypot(a.me.x - rec.x, a.me.z - rec.z) : 1e9;

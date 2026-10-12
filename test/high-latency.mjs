@@ -9,7 +9,8 @@ import { stubModel, placeOnGrid } from '../shared/race.js';
 import { TrackSim } from '../shared/trackCore.js';
 import { LAYOUTS } from '../src/layouts.js';
 import { MAPS } from '../src/maps.js';
-import { startDelayProxy } from './ws-delay.mjs';
+import { spawnLink } from './rtc-link.mjs';
+import { signUrl } from './rtc-node.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -31,7 +32,7 @@ for (let i = 0; i < 100 && !port; i++) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v1') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 const track = new TrackSim(LAYOUTS[MAPS[0].layout], { isBridge: MAPS[0].isBridge });
 const FRAME_MS = 1000 / 60;
@@ -101,8 +102,12 @@ function stats(tr) {
 const pct = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))] || 0; };
 
 async function runConfig(cfg) {
-  const proxy = startDelayProxy(`ws://localhost:${port}/ws`, {
+  // 比赛数据现在跑在 UDP 语义的数据通道上，注入链路必须是同一条语义：
+  // 快照可以单独丢、输入可以单独丢，或者按 TCP 的样子做队头阻塞（对照组）
+  const proxy = await spawnLink({
+    sign: signUrl(port), http: `http://localhost:${port}`,
     upMs: cfg.rtt / 2, downMs: cfg.rtt / 2, jitterMs: cfg.jitter, seed: cfg.seed,
+    dropSnap: cfg.dropSnap, dropInput: cfg.dropInput, holdPct: cfg.holdPct, holdMs: cfg.holdMs,
   });
   const wait = async (fn, ms, what, diag) => {
     const e = Date.now() + ms;
@@ -234,6 +239,7 @@ async function runConfig(cfg) {
       // 服务器有没有真跑满 120Hz：跑不满说明这台机器在拖后腿，这一档的抖动不能算到机制头上
       srvHz: srv.samples > 1 && srv.t1 > srv.t0 ? +((srv.k1 - srv.k0) / (srv.t1 - srv.t0) * 1000).toFixed(1) : 0,
       rtt: cfg.rtt, jitter: cfg.jitter, stall: !!cfg.stall, fps: cfg.fps || 60,
+      arm: cfg.holdPct ? `·丢${cfg.holdPct}%队头阻塞` : cfg.dropSnap ? `·丢${cfg.dropSnap}%快照` : cfg.dropInput ? `·丢${cfg.dropInput}%输入` : '',
       own: stats(tr.own), rem: stats(tr.rem),
       own2: cfg.stall ? stats(tr.own2) : null, rem2: cfg.stall ? stats(tr.rem2) : null,
       own2tail: cfg.stall ? stats(tr.own2.slice(tailAt)) : null,
@@ -243,7 +249,7 @@ async function runConfig(cfg) {
       recovCutsTail: cfg.stall ? a.cuts - raTailCuts : 0,
       recovRa: cfg.stall ? a.reanchors - raBefore : 0,
       recovRaTail: cfg.stall ? a.reanchors - raTail : 0,
-      link: { ...proxy.stats, ms: cfg.stall ? 4 : Math.round(MEASURE_MS / 1000) },
+      link: { ...(await proxy.poll()), ms: cfg.stall ? 4 : Math.round(MEASURE_MS / 1000) },
       clk: { jumps: clk.jumps, maxDelta: +clk.maxDelta.toFixed(2), starve: clk.starve, frames: tr.rem.length, rebuff: clk.rebuff, stalls: clk.stalls, maxDt: +clk.maxDt.toFixed(1) },
       reanchors: raWin, rolls: a.rolls, gapMax: a.gapMax,
       corrMax: pct(cd, 0.999), corrP95: pct(cd, 0.95), corrN: cd.length,
@@ -254,7 +260,7 @@ async function runConfig(cfg) {
     };
   } finally {
     clearInterval(loop);
-    proxy.close();
+    await proxy.close();
     for (const n of all) n.dispose();
     // 关掉房间：否则它的 120Hz 循环会一直占着 CPU，把后面几档的测量结果污染掉
     if (code) await fetch(`http://localhost:${port}/api/admin/rooms/${code}/close?key=${KEY}`, { method: 'POST' }).catch(() => {});
@@ -280,6 +286,10 @@ const CONFIGS = [
   { rtt: 240, jitter: 30, seed: 66, frameMs: 250, fps: 4, stall: true, id: 'fps4stall' },
   { rtt: 240, jitter: 30, seed: 66, frameMs: 300, fps: 3, stall: true, id: 'fps3stall' },
   { rtt: 240, jitter: 30, seed: 66, frameMs: 1000, fps: 1, stall: true, id: 'fps1stall' },
+  // 同一批丢包位置，三种链路语义对照：TCP 队头阻塞 / 只丢快照 / 只丢输入
+  { rtt: 240, jitter: 30, seed: 33, holdPct: 6, holdMs: 160, id: 'hol' },
+  { rtt: 240, jitter: 30, seed: 33, dropSnap: 6, id: 'dropdn' },
+  { rtt: 240, jitter: 30, seed: 33, dropInput: 6, id: 'dropup' },
 ];
 CONFIGS.forEach((c) => { c.id = c.id || String(c.rtt); });
 
@@ -301,7 +311,7 @@ for (const cfg of CONFIGS) {
   const own = r.own2 || r.own, rem = r.rem2 || r.rem;
   const ra = r.stall ? r.recovRa : r.reanchors;
   const cuts = r.stall ? r.recovCuts : r.cuts;
-  const label = (r.stall ? `${r.rtt}ms+卡3秒` : r.fps !== 60 ? `${r.rtt}ms@${r.fps}fps` : `${r.rtt}ms ±${r.jitter}`).padEnd(15);
+  const label = (r.stall ? `${r.rtt}ms+卡3秒` : r.fps !== 60 ? `${r.rtt}ms@${r.fps}fps` : `${r.rtt}ms ±${r.jitter}`).padEnd(15) + r.arm;
   console.log(
     `${label} |${f(own.tele, 8)}${f(own.maxOver, 10)}${f(own.p99Over, 9)}${f(ra, 6)}${f(cuts, 5)}${f(r.corrP95.toFixed(2) + '/' + r.corrMax.toFixed(1), 14)} |` +
     `${f(rem.tele, 8)}${f(rem.maxOver, 10)}${f(rem.p99Over, 9)}${f(rem.reversals, 6)} |${f(r.gapMax, 8)}${f(r.rttSeen + 'ms', 9)}`
@@ -310,14 +320,14 @@ for (const cfg of CONFIGS) {
   if (r.stall) {
     console.log(`  卡 3 秒后恢复：前 0.6s 内重锚 ${r.recovRa} 次/切镜头 ${r.recovCuts} 次，之后 2s 本车瞬移 ${r.own2tail.tele} 次/峰值 ${r.own2tail.maxOver} 倍｜他车瞬移 ${r.rem2tail ? r.rem2tail.tele : '?'} 次/峰值 ${r.rem2tail ? r.rem2tail.maxOver : '?'} 倍·重锚 ${r.recovRaTail} 次/切镜头 ${r.recovCutsTail} 次`);
   }
-  console.log(`  链路：上 ${r.link.up} 包/${r.link.upBytes}B · 下 ${r.link.down} 包/${r.link.downBytes}B（${r.link.ms}s）· 丢弃 类型${r.link.badType}/无目标${r.link.noTarget}/发送失败${r.link.sendFail}｜他车渲染时钟：跳变 ${r.clk.jumps} 次/最大单帧 ${r.clk.maxDelta}tick · 缓冲饥饿 ${r.clk.starve}/${r.clk.frames} 帧 · 状态重建 ${r.clk.rebuff} 次 · 本端卡顿帧 ${r.clk.stalls}(最长 ${r.clk.maxDt}ms)｜>1.5m 修正 ${r.bigBump + r.bigOther} 次：撞车后 ${r.bigBump} / 其他 ${r.bigOther}｜服务器侧 ${r.srvHz}Hz |bias|峰 ${r.srv.biasMax} · 输入丢弃 ${r.srv.droppedMax} · 队列峰 ${r.srv.pendMax}${h.rooms ? ` · 服务器上还有 ${h.rooms} 个房间在仿真` : ''}`);
+  console.log(`  链路(UDP 语义)：上 ${r.link.up} 包/${r.link.upBytes}B · 下 ${r.link.down} 包/${r.link.downBytes}B · 会话 ${r.link.sessions}（${r.link.ms}s）· 丢弃 快照${r.link.dropSnap}/输入${r.link.dropInput} · 队头阻塞 ${r.link.held} · 信令错 ${r.link.upErr}｜他车渲染时钟：跳变 ${r.clk.jumps} 次/最大单帧 ${r.clk.maxDelta}tick · 缓冲饥饿 ${r.clk.starve}/${r.clk.frames} 帧 · 状态重建 ${r.clk.rebuff} 次 · 本端卡顿帧 ${r.clk.stalls}(最长 ${r.clk.maxDt}ms)｜>1.5m 修正 ${r.bigBump + r.bigOther} 次：撞车后 ${r.bigBump} / 其他 ${r.bigOther}｜服务器侧 ${r.srvHz}Hz |bias|峰 ${r.srv.biasMax} · 输入丢弃 ${r.srv.droppedMax} · 队列峰 ${r.srv.pendMax}${h.rooms ? ` · 服务器上还有 ${h.rooms} 个房间在仿真` : ''}`);
 }
 
 if (GATE) {
   // 门禁：任何链路档位都不允许出现肉眼可见的瞬移（单帧位移超过该帧应有位移的 2.5 倍）
   // 卡顿档额外要求：卡完允许一次重锚定（0.6s 内），之后必须立刻稳住
   for (const r of out) {
-    const tag = `${r.rtt}ms${r.stall ? '+卡顿' : ''}${r.fps !== 60 ? '@' + r.fps + 'fps' : ''}`;
+    const tag = `${r.rtt}ms${r.stall ? '+卡顿' : ''}${r.fps !== 60 ? '@' + r.fps + 'fps' : ''}${r.arm || ''}`;
     // 环境不达标就不判：服务器跑不满 120Hz、或本端采样帧被拖到 40ms 以上，
     // 量出来的是这台机器的负载，不是链路机制。跳过并说明，比误报"失败"更有用。
     if (r.srvHz < 112 || r.clk.maxDt > 40) {

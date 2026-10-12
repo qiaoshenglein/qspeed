@@ -12,6 +12,8 @@
 #   ./deploy.sh log          跟踪服务器日志
 #
 # 环境变量：PORT=8790  HOST_BIND=0.0.0.0  BUN=/path/to/bun  ADMIN_TOKEN=自定义后台口令
+#           RTC_PORT_RANGE=40000-40099  比赛数据的 UDP 端口段（公网部署要在安全组放行同样的 UDP 段）
+#           RTC_PUBLIC_IP=1.2.3.4       服务器对外的公网地址（EIP 未绑到网卡、机器自己看不到公网 IP 时必须给）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,8 +23,10 @@ mkdir -p "$TMP"
 PIDF="$TMP/deploy.pid"
 PORTF="$TMP/deploy.port"
 LOGF="$TMP/server.log"
-BUILD_ID="qq-speed-net-v1"
+BUILD_ID="qq-speed-net-v2"
 WANT_PORT="${PORT:-8790}"
+RTC_PORT_RANGE="${RTC_PORT_RANGE:-40000-40099}"
+RTC_PUBLIC_IP="${RTC_PUBLIC_IP:-}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf '✗ %s\n' "$*" >&2; exit 1; }
@@ -65,7 +69,17 @@ pick_port() {
 }
 
 # ---------- 步骤 ----------
+# 缺依赖是"只同步代码、没跑 bun install"的典型症状，而它冒出来的样子是模块找不到，
+# 很容易被当成端口或代码问题，所以在这里先按名字确认。
+check_deps() {
+  local miss=""
+  [ -d node_modules/esbuild ] || miss="$miss esbuild"
+  [ -d node_modules/werift ] || miss="$miss werift"
+  [ -z "$miss" ] || die "缺少依赖：${miss# }。先运行 bun install（werift 是服务端的 WebRTC 传输层，esbuild 用来构建前端）"
+}
+
 do_build() {
+  check_deps
   say "▶ 构建前端产物"
   "$BUN_BIN" build.mjs >/dev/null
   local size; size="$(wc -c < dist/index.html | tr -d ' ')"
@@ -75,8 +89,16 @@ do_build() {
 }
 
 do_smoke() {
-  say "▶ 回归门禁（Node 侧 7 个用例）"
   local fails=0
+  # 传输层先自检：DTLS/SCTP 起不来时，后面每一条用例都会以"连不上"的形式失败，看不出真原因
+  if out="$("$BUN_BIN" test/rtc-loopback.mjs 2 2>&1 | tr -d '\000')" && printf '%s' "$out" | grep -q '握手：2/2'; then
+    printf '  ✓ %-18s %s\n' "rtc 传输自检" "$(printf '%s' "$out" | grep -E '往返时延' | head -1)"
+  else
+    fails=$((fails + 1))
+    say "  ✗ WebRTC 传输层自检没通过：比赛数据通道在这台机器上跑不起来，先解决它再看其余用例"
+    printf '%s\n' "$out" | head -4
+  fi
+  say "▶ 回归门禁（Node 侧 7 个用例）"
   for t in race-unit items-unit net-race rooms-reconnect reconnect-core smoothness admin-api; do
     if out="$("$BUN_BIN" "test/$t.mjs" 2>&1)"; then
       printf '  ✓ %-18s %s\n' "$t" "$(printf '%s' "$out" | tr -d '\000' | grep -E '^结果' | tail -1)"
@@ -107,7 +129,8 @@ do_start() {
   local port; port="$(pick_port)"
   say "▶ 启动服务器（端口 $port）"
   : > "$LOGF"
-  PORT="$port" NET_PORT_FILE="$PORTF" "$BUN_BIN" server/index.js >>"$LOGF" 2>&1 &
+  PORT="$port" NET_PORT_FILE="$PORTF" RTC_PORT_RANGE="$RTC_PORT_RANGE" RTC_PUBLIC_IP="$RTC_PUBLIC_IP" \
+    "$BUN_BIN" server/index.js >>"$LOGF" 2>&1 &
   local pid=$!
   printf '%s' "$pid" > "$PIDF"
 
@@ -118,7 +141,12 @@ do_start() {
     if [ -s "$PORTF" ]; then real="$(tr -d ' \t\r\n' < "$PORTF")"; [ -n "$real" ] && break; fi
     sleep 0.1
   done
-  [ -n "$real" ] || { tail -5 "$LOGF" >&2; die "服务器没有写出监听端口，见 $LOGF"; }
+  [ -n "$real" ] || {
+    tail -8 "$LOGF" >&2
+    grep -qaE "Cannot find package|Module not found|resolve" "$LOGF" \
+      && die "服务器起不来：日志里是模块解析失败，八成没跑 bun install" \
+      || die "服务器没有写出监听端口，见 $LOGF"
+  }
 
   # 健康门禁：必须是本项目这个构建
   local h="" n=0
@@ -135,6 +163,10 @@ do_start() {
   for ip in $lan; do say "  局域网     http://$ip:$real/"; done
   say ""
   say "  把上面的地址发给朋友，同一局域网内打开即可；进「在线对战」→ 创建房间，或从房间列表点加入。"
+  say "  比赛数据走 UDP 数据通道（WebRTC），信令仍是 HTTP："
+  say "    · UDP 端口段 $RTC_PORT_RANGE 必须在防火墙/云安全组放行（只放行 TCP 的话玩家连得上大厅、进不了比赛）"
+  if [ -n "$RTC_PUBLIC_IP" ]; then say "    · 对外 advertised 地址 $RTC_PUBLIC_IP"
+  else say "    · 未设 RTC_PUBLIC_IP：用本机网卡地址。机器自己看不到公网 IP（NAT 式公网）时，请设 RTC_PUBLIC_IP=<公网IP> 后重启"; fi
   local key; key="$(admin_key || true)"
   if [ -n "$key" ]; then
     say "  后台运维台 http://127.0.0.1:$real/admin?key=$key  （看房间/车手实况，可强制开赛、补电脑、请离、关房）"

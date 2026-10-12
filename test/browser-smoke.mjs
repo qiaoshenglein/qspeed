@@ -22,7 +22,7 @@ while (Date.now() - t0 < 8000) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const h = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (h.build !== 'qq-speed-net-v1') { console.log('FAIL 端口被旧进程占用', h); process.exit(1); }
+if (h.build !== 'qq-speed-net-v2') { console.log('FAIL 端口被旧进程占用', h); process.exit(1); }
 
 const browser = await chromium.launch({
   executablePath: CHROME, headless: true,

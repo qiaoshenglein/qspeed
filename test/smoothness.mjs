@@ -1,6 +1,7 @@
 // 渲染平滑度测量：用真实服务器 + 真实客户端栈，按 60Hz 定步长采样"最终渲染位姿"序列，
 // 计算抖动指标（ jerk / 方向反转 / 单帧跳变 ）。这里测的是机制，不是这台慢机器的帧率。
 import { NetCore, INTERP_DELAY_MS } from '../shared/session.js';
+import { signUrl } from './rtc-node.mjs';
 import { PlayerCar } from '../shared/vehicle.js';
 import { stubModel, placeOnGrid, DT } from '../shared/race.js';
 import { TrackSim } from '../shared/trackCore.js';
@@ -22,7 +23,7 @@ for (let i = 0; i < 100 && !port; i++) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v1') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = '') => { c ? (pass++, console.log(`PASS ${n}${x ? ' · ' + x : ''}`)) : (fail++, console.log(`FAIL ${n}${x ? ' · ' + x : ''}`)); };
@@ -34,7 +35,7 @@ function makeClient(name, skin, over = {}) {
   const car = new PlayerCar(track, stubModel(), name);
   placeOnGrid(car, 0);
   const net = new NetCore({
-    url: `ws://localhost:${port}/ws`, name, skin, map: 'city', laps: 2, mode: 0, diff: 1,
+    url: signUrl(port), name, skin, map: 'city', laps: 2, mode: 0, diff: 1,
     code: '', create: true, track, ownCar: car, ...over,
   });
   net.traceOwn = [];

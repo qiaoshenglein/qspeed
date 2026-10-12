@@ -82,7 +82,7 @@ export function createAdmin(ctx) {
     }
     return {
       server: {
-        build: 'qq-speed-net-v1', proto: 1, sim_hz: 120, snap_hz: 20, grid: GRID,
+        build: 'qq-speed-net-v2', proto: 1, sim_hz: 120, snap_hz: 20, grid: GRID,
         uptime_s: Math.round((Date.now() - ctx.startedAt()) / 1000),
         now: Date.now(),
       },
