@@ -2,6 +2,8 @@
 # 飞车 3D · 在线对战一键部署（本机 / 局域网）
 #
 #   ./deploy.sh              构建并启动（默认），打印局域网分享地址
+#   ./deploy.sh setup        第一次部署用：装依赖 + 问公网IP/UDP端口段（存进 .deploy.env）+ 启动
+#   ./deploy.sh public-ip IP 只改公网 IP 并记住，然后 ./deploy.sh restart
 #   ./deploy.sh start        同上，可加 --smoke 先跑测试门禁
 #   ./deploy.sh stop         停掉由本脚本启动的服务
 #   ./deploy.sh status       进程/端口/房间数
@@ -24,6 +26,20 @@ PIDF="$TMP/deploy.pid"
 PORTF="$TMP/deploy.port"
 LOGF="$TMP/server.log"
 BUILD_ID="qq-speed-net-v2"
+ENVF="$ROOT/.deploy.env"
+
+# 上次 setup 存下来的参数（真实环境变量优先，方便临时覆盖）
+if [ -f "$ENVF" ]; then
+  while IFS='=' read -r k v; do
+    case "$k" in
+      PORT) : "${PORT:=$v}" ;;
+      BUN) : "${BUN:=$v}" ;;
+      RTC_PORT_RANGE) : "${RTC_PORT_RANGE:=$v}" ;;
+      RTC_PUBLIC_IP) : "${RTC_PUBLIC_IP:=$v}" ;;
+    esac
+  done < <(grep -av '^\s*#' "$ENVF" | grep -a '=' || true)
+fi
+
 WANT_PORT="${PORT:-8790}"
 RTC_PORT_RANGE="${RTC_PORT_RANGE:-40000-40099}"
 RTC_PUBLIC_IP="${RTC_PUBLIC_IP:-}"
@@ -112,7 +128,8 @@ do_smoke() {
     printf '  ✓ %-18s %s\n' "net-race(道具)" "$(printf '%s' "$out" | tr -d '\000' | grep -E '^结果' | tail -1)"
   else
     fails=$((fails + 1))
-    say "  ✗ net-race(道具) 失败，或 ITEM=1 没生效（跑出的是竞速用例）"
+    say "  ✗ net-race(道具) 没通过（或 ITEM=1 没生效，跑出的是竞速用例）"
+    printf '%s\n' "$(printf '%s' "$out" | tr -d '\000' | grep -E '^(FAIL|SKIP|结果)' | head -6)"
   fi
   # 高延迟瞬移门禁：只跑 240/400ms 两档、每档 3 秒，控制在半分钟以内
   if out="$(GATE=1 ONLY=240,400 MEASURE_MS=3000 "$BUN_BIN" test/high-latency.mjs 2>&1 | tr -d '\000')"; then
@@ -251,6 +268,76 @@ stop_server() {
   say "  ✓ 已停止（所有房间随之销毁）"
 }
 
+# ---------- setup：把公网 IP / UDP 端口段问一次，存进 .deploy.env ----------
+# 非交互环境（CI、管道、nohup）不提问，直接用默认值或已存值，绝不卡住
+ask() {
+  local q="$1" d="$2" a=""
+  if [ ! -t 0 ]; then printf '%s' "$d"; return 0; fi
+  printf '%s [回车=%s]: ' "$q" "${d:-留空}" >&2
+  read -r a || a=""
+  printf '%s' "${a:-$d}"
+}
+
+save_env() {
+  {
+    printf '# deploy.sh setup 存的参数（不含后台口令，口令仍在 .data/admin-token）\n'
+    printf 'PORT=%s\n' "${WANT_PORT:-8790}"
+    printf 'RTC_PORT_RANGE=%s\n' "$RTC_PORT_RANGE"
+    printf 'RTC_PUBLIC_IP=%s\n' "$RTC_PUBLIC_IP"
+  } > "$ENVF"
+  say "  已写入 $(show_path "$ENVF")，以后直接 ./deploy.sh 就不用再填"
+}
+
+# 云服务器上"网卡地址看不到公网 IP"是最常见的连不上原因；先探一下给用户当默认值
+guess_public_ip() {
+  command -v curl >/dev/null 2>&1 || return 0
+  local u g
+  for u in https://ifconfig.me/ip https://api.ipify.org; do
+    g="$(curl -fsS --max-time 3 "$u" 2>/dev/null | tr -dc '0-9.')"
+    case "$g" in *.*.*) printf '%s' "$g"; return 0 ;; esac
+  done
+}
+
+do_setup() {
+  say "▶ 一键部署设置（只做一次）"
+  if [ ! -d node_modules/esbuild ] || [ ! -d node_modules/werift ]; then
+    say "  缺依赖，安装中：bun install（werift 是服务端的 WebRTC 传输层，只装在服务端）"
+    "$BUN_BIN" install >/dev/null 2>&1 || die "bun install 失败：这台机器能访问 npm 源吗？"
+    say "  ✓ 依赖就位"
+  else
+    say "  ✓ 依赖已在"
+  fi
+
+  local ip="$RTC_PUBLIC_IP" guess=""
+  if [ -z "$ip" ]; then
+    guess="$(guess_public_ip || true)"
+    [ -n "$guess" ] && say "  探测到这台机器对外的地址：$guess（云上一般就是公网 IP）"
+    ip="$(ask "公网 IP —— 玩家从公网连进来要用它；纯局域网玩就留空" "$guess")"
+  else
+    say "  已存公网 IP：$ip（要改：./deploy.sh public-ip <IP>）"
+  fi
+  RTC_PUBLIC_IP="$ip"
+
+  RTC_PORT_RANGE="$(ask "UDP 端口段 —— 云安全组要放行同样的 UDP 入方向" "$RTC_PORT_RANGE")"
+  save_env
+
+  if [ -n "$RTC_PUBLIC_IP" ]; then
+    say "  还差一件事（脚本替不了你做）：在云控制台放行 UDP $RTC_PORT_RANGE 入方向到这台机器"
+    say "  自检口诀：玩家能进大厅、进不了比赛 = UDP 没通；连大厅都打不开 = TCP 端口没通"
+  else
+    say "  没填公网 IP：将用本机网卡地址。局域网内可玩；若这台机器网卡看不到公网 IP，请 ./deploy.sh public-ip <公网IP> 后重启"
+  fi
+}
+
+do_public_ip() {
+  local ip="${1:-}"
+  [ -n "$ip" ] || ip="$(ask "公网 IP" "${RTC_PUBLIC_IP:-}")"
+  [ -n "$ip" ] || die "没给地址：./deploy.sh public-ip 43.163.68.6"
+  RTC_PUBLIC_IP="$ip"
+  save_env
+  say "已记下 $ip · 重启生效：./deploy.sh restart"
+}
+
 do_status() {
   local port; port="$(running_port)"
   if [ -z "$port" ]; then say "未在运行（./deploy.sh 启动）"; return 0; fi
@@ -266,6 +353,8 @@ for a in "$@"; do case "$a" in --smoke) SMOKE=true ;; esac; done
 
 case "${1:-start}" in
   start) [ "${SMOKE:-false}" = true ] && do_smoke; do_build; do_start ;;
+  setup) do_setup; do_build; do_start ;;
+  public-ip) do_public_ip "${2:-}" ;;
   stop) stop_server ;;
   restart) stop_server || true; [ "${SMOKE:-false}" = true ] && do_smoke; do_build; do_start ;;
   status) do_status ;;
