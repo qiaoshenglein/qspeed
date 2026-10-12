@@ -44,6 +44,9 @@ export function createRtcHub({ onMessage, onClose, onError }) {
   const peers = new Map(); // peerId -> Peer
   let seq = 1;
   let lastError = '';
+  // 连接断了就从表里消失，所以"我们主动丢了多少快照"必须另存一份累计值，
+  // 否则运维看到玩家抖动却查不到是被自己的背压策略丢的、还是链路丢的
+  const totals = { fastDropped: 0, framesOut: 0, bytesOut: 0 };
 
   class Peer {
     constructor(id, pc) {
@@ -77,9 +80,10 @@ export function createRtcHub({ onMessage, onClose, onError }) {
       if (ch === this.fast && ch.bufferedAmount > FAST_QUEUE_LIMIT) {
         // 快照队列都在 32KB 之外了：这条链路已经不是"慢"而是"堵"，丢掉旧的比留着更有帮助
         this.framesFastDrop++;
+        totals.fastDropped++;
         return;
       }
-      try { ch.send(bytes); this.bytesOut += bytes.length; this.framesOut++; } catch { this.markDead(); }
+      try { ch.send(bytes); this.bytesOut += bytes.length; this.framesOut++; totals.framesOut++; totals.bytesOut += bytes.length; } catch { this.markDead(); }
     }
 
     markDead() {
@@ -168,6 +172,9 @@ export function createRtcHub({ onMessage, onClose, onError }) {
         peers: peers.size,
         udpRange: PORT_RANGE ? RANGE : 'auto',
         publicIp: PUBLIC_IP || 'auto',
+        sentFrames: totals.framesOut,
+        sentKb: Math.round(totals.bytesOut / 1024),
+        fastDropped: totals.fastDropped,
         lastError,
       };
     },

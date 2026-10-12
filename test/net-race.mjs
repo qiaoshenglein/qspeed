@@ -55,6 +55,7 @@ function makeClient(name, skin, drive) {
     const real = now - last;
     last = now;
     net.maxFrame = Math.max(net.maxFrame || 0, real);
+    if (net.phase >= 2) { (net.frames || (net.frames = [])).push(real); }
     const dtMs = Math.min(200, real); // 与游戏一致：一帧拖长了就补跑，不要人为让本端落后
     let inp = { up: false, down: false, left: false, right: false, shift: false, upPressed: false, wPressed: false, nitroPressed: false };
     if (net.phase >= 1) {
@@ -130,6 +131,10 @@ while (a.net.phase < 2 && Date.now() - raceStart < 16000) await Bun.sleep(100);
 ok('进入比赛阶段', a.net.phase >= 2, `phase=${a.net.phase}`);
 
 const t1 = Date.now();
+// 速率类判据只能用"开赛之后"的增量。WebRTC 建连本身要 0.5~1 秒（信令 + ICE + DTLS），
+// 大厅与倒计时期间也在按 20Hz 收快照；把这些算进比赛窗口会凭空把 20Hz 报成 30Hz、
+// 把带宽抬高一大截——换传输之后这个偏差才第一次暴露出来。
+const rateBase = { aSnaps: a.net.snapCount, aBytes: a.net.downBytes, bSnaps: b.net.snapCount, bBytes: b.net.downBytes };
 const dbg = async () => {
   if (!process.env.NET_DEBUG) return;
   const d = await (await fetch(`http://localhost:${port}/debug/rooms`)).json();
@@ -144,6 +149,10 @@ const dbg = async () => {
 while (Date.now() - t1 < (ITEM ? 15000 : 9000)) { await Bun.sleep(1500); await dbg(); }
 
 const sa = a.net.stats(), sb = b.net.stats();
+sa.snaps -= rateBase.aSnaps;
+sb.snaps -= rateBase.bSnaps;
+sa.kbDown = +((a.net.downBytes - rateBase.aBytes) / 1024).toFixed(2);
+sb.kbDown = +((b.net.downBytes - rateBase.bBytes) / 1024).toFixed(2);
 const recA = a.net.lastSnap?.racers.find((x) => x.carId === a.net.myCarId);
 const recB = a.net.lastSnap?.racers.find((x) => x.carId === b.net.myCarId);
 const dur = (Date.now() - t1) / 1000;
@@ -151,12 +160,16 @@ const dur = (Date.now() - t1) / 1000;
 ok('快照频率约 20Hz', sa.snaps / dur > 15 && sa.snaps / dur < 30, `${(sa.snaps / dur).toFixed(1)}Hz`);
 ok('甲车在前进', recA && recA.progress > 200, `${Math.round(recA?.progress || 0)}m`);
 ok('乙车在前进', recB && recB.progress > 200, `${Math.round(recB?.progress || 0)}m`);
-// 预测误差要按"本端有没有被这台机器拖住"来判：一帧卡到 60ms 以上时，
-// 本端 tick 与权威 tick 的领先量本身就在剧烈变化，量出来的误差不能算到机制头上
-const envOk = Math.max(a.net.maxFrame || 0, b.net.maxFrame || 0) <= 60;
+// 预测误差要按"本端有没有被这台机器拖住"来判。只看最长帧不够：一帧 60ms 偶发一次不要紧，
+// 但 p95 帧长决定了一帧要补跑多少个 tick —— 补跑 7 个 tick 与补跑 1.2 个 tick，
+// 量出来的 maxErr 完全不是一个东西。0.6m 的阈值不动，判据换成"帧长分布"。
+const p95 = (arr) => { const s = [...(arr || [])].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length * 0.95)] : 0; };
+const fA = p95(a.net.frames), fB = p95(b.net.frames);
+const envOk = Math.max(a.net.maxFrame || 0, b.net.maxFrame || 0) <= 60 && Math.max(fA, fB) <= 24;
+const envDesc = `帧长 p95 甲 ${fA.toFixed(1)}ms / 乙 ${fB.toFixed(1)}ms，最长 ${Math.max(a.net.maxFrame || 0, b.net.maxFrame || 0).toFixed(0)}ms`;
 if (ITEM) { /* 道具模式的误差另有专门的判据，见下方 */ }
 else if (!envOk) {
-  console.log(`SKIP 预测误差：本端最长帧 甲 ${(a.net.maxFrame || 0).toFixed(0)}ms / 乙 ${(b.net.maxFrame || 0).toFixed(0)}ms，机器负载超出可判范围（甲 maxErr=${sa.maxErr}m 乙=${sb.maxErr}m）`);
+  console.log(`SKIP 预测误差：这台机器把本端帧拖长了（${envDesc}），一帧要补跑多个 tick，量出的误差不能算到机制头上（甲 maxErr=${sa.maxErr}m 乙=${sb.maxErr}m）`);
 } else {
   ok('预测误差可控(<0.6m)', sa.maxErr < 0.6, `甲 maxErr=${sa.maxErr}m 回滚${sa.rolls}次`);
   ok('预测误差可控 乙(<0.6m)', sb.maxErr < 0.6, `乙 maxErr=${sb.maxErr}m 回滚${sb.rolls}次`);
@@ -166,7 +179,7 @@ else if (!envOk) {
 if (envOk) {
   ok('客户端 tick 与服务器世界 tick 同步', Math.abs(a.net.tick - a.net.worldTick) < 20 && Math.abs(b.net.tick - b.net.worldTick) < 20, `甲差${a.net.tick - a.net.worldTick} 乙差${b.net.tick - b.net.worldTick}`);
 } else {
-  console.log(`SKIP tick 同步：本端最长帧 甲 ${(a.net.maxFrame || 0).toFixed(0)}ms / 乙 ${(b.net.maxFrame || 0).toFixed(0)}ms（一帧 200ms 本就等于少跑 24 tick，不能算到机制头上）`);
+  console.log(`SKIP tick 同步：${envDesc}（一帧拖长就等于少跑若干 tick，这个差值不能算到机制头上）`);
 }
 ok('速度未超物理上限', Math.abs(recA.s) <= 86 + 1 && Math.abs(recB.s) <= 86 + 1, `${recA.s.toFixed(1)}/${recB.s.toFixed(1)} m/s，上限 ${TUNE.vmaxNitro}`);
 ok('名次由服务器判定且互不相同', recA.place !== recB.place, `甲${recA.place} 乙${recB.place}`);

@@ -116,10 +116,22 @@ do_smoke() {
   fi
   # 高延迟瞬移门禁：只跑 240/400ms 两档、每档 3 秒，控制在半分钟以内
   if out="$(GATE=1 ONLY=240,400 MEASURE_MS=3000 "$BUN_BIN" test/high-latency.mjs 2>&1 | tr -d '\000')"; then
-    say "  ✓ 高延迟瞬移 $(printf '%s' "$out" | grep -cE '^PASS') 档无可感知瞬移"
+    passed="$(printf '%s' "$out" | grep -cE '^PASS')"; skipped="$(printf '%s' "$out" | grep -cE '^SKIP')"
+    if [ "$passed" -eq 0 ]; then
+      # 一个"全部因负载跳过"的门禁等于没门禁：绿色会骗人，这里必须按失败处理
+      fails=$((fails + 1))
+      say "  ✗ 高延迟瞬移：两档都因机器负载跳过了，这次什么都没验到（跑完再在空闲机器上重跑一次）"
+      printf '%s\n' "$out" | grep -E '^SKIP' | head -2
+    else
+      if [ "$skipped" -gt 0 ]; then
+        say "  ✓ 高延迟瞬移 ${passed} 档无可感知瞬移（另有 ${skipped} 档因机器负载跳过，见日志）"
+      else
+        say "  ✓ 高延迟瞬移 ${passed} 档无可感知瞬移"
+      fi
+    fi
   else
     fails=$((fails + 1))
-    printf '%s\n' "$out" | grep -E '^(FAIL|结果)' | head -6
+    printf '%s\n' "$out" | grep -E '^(FAIL|SKIP|结果)' | head -6
   fi
   [ "$fails" -eq 0 ] || die "回归未通过（$fails 个用例失败），已阻止启动"
   say "  ✓ 全绿"
