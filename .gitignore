@@ -1,0 +1,10 @@
+# 机器本地参数：公网 IP / UDP 端口段，各台机器不同，别提交
+.deploy.env
+
+# 依赖与运行时垃圾（服务器上跑 ./deploy.sh setup 会自动 bun install）
+node_modules/
+.tmp/
+.data/
+
+# dist/ 故意不在这里：那台机器是靠仓库里的 dist/index.html 拿到前端包的，
+# 忽略它就等于"代码改了但玩家还在跑旧版本"

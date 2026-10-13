@@ -13,7 +13,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PORT_FILE = ROOT + '.tmp/smooth-port';
 try { await Bun.write(PORT_FILE, ''); } catch {}
 const child = Bun.spawn([process.execPath, 'server/index.js'], {
-  cwd: ROOT, env: { ...process.env, PORT: '0', NET_PORT_FILE: PORT_FILE },
+  cwd: ROOT, env: { ...process.env, PORT: '0', NET_PORT_FILE: PORT_FILE, ADMIN_TOKEN: 'k' },
   stdout: 'ignore', stderr: 'ignore',
 });
 let port = 0;
@@ -23,7 +23,7 @@ for (let i = 0; i < 100 && !port; i++) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v3') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = '') => { c ? (pass++, console.log(`PASS ${n}${x ? ' · ' + x : ''}`)) : (fail++, console.log(`FAIL ${n}${x ? ' · ' + x : ''}`)); };
@@ -141,6 +141,14 @@ console.log('本车渲染轨迹:', JSON.stringify(own));
 console.log('他车渲染轨迹:', JSON.stringify(rem));
 console.log(`采样环境：服务器实测 ${srvHz}Hz · 本端最长帧 ${env.maxDt.toFixed(1)}ms · 卡顿帧 ${env.stalls}`);
 if (srvHz < 112 || env.maxDt > 40) {
+  // 服务器根本没推进（没开赛 / 上行没建席位）不是"这台机器慢"，是这一趟跑废了，必须判失败；
+  // 只有真的在跑但跑不满才 SKIP，避免把负载当成机制问题。
+  if (a.worldTick <= 0 || VB === 0) {
+    console.log(`FAIL 这一趟什么都没跑到：服务器 tick ${a.worldTick} · 他车 ${VB} 帧 · 相位 甲${a.phase}/乙${b.phase}/丙${bb.phase}`);
+    for (const c of [a, b, bb]) c.dispose();
+    child.kill();
+    process.exit(1);
+  }
   // 这台机器没跑满，量出来的是负载不是机制——报 SKIP，让部署门禁不被误伤
   console.log(`SKIP 环境负载不足（服务器 ${srvHz}Hz / 最长帧 ${env.maxDt.toFixed(0)}ms），本项不判成败`);
   for (const c of [a, b, bb]) c.dispose();

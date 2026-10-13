@@ -53,8 +53,12 @@ export function rtcTransport(url, opt = {}) {
       opened++;
       if (opened === 2 && !t.ready) {
         t.ready = true;
-        for (const b of t.queue.splice(0)) t.send(b);
+        // 先让 onOpen 把 HELLO 发出去，再补排队里的上行：席位是 HELLO 建的，
+        // 服务端认不出还没建席位的连接发来的 READY/LEAVE，会直接丢掉。
+        // 早先这里是"先冲刷队列再 onOpen"，于是开局手快按准备的人（以及所有在握手期
+        // 就 ready 的测试）永远准备不上——房间卡在房间界面不倒计时。
         t.onOpen?.();
+        for (const b of t.queue.splice(0)) t.send(b);
       }
     };
     ch.onclose = () => t.close();

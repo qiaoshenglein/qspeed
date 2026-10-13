@@ -22,8 +22,10 @@ const MAX_RECONNECTS = 6; // 自动回线尝试次数
 //    这种情况一次性切镜头（车与相机同时到位），是"你不在场"，不是"网络差"。
 const MAX_LAT = 9;      // 滑行时视觉横移最快 9 m/s
 const MAX_YAW = 3.0;    // 滑行时视觉朝向最快 3 rad/s
-const MAX_PAY_MS = 0.9; // 再大的滑行偏差也要在 0.9s 内偿清，否则车会长时间漂在物理位置之外
+const HOLD_MS = 140;    // 滞后连续这么久没再被快照量出来，才认为它消失、开始偿还（3 份快照）
 const CUT_DIST = 20;    // 超过这个偏差判定为"整段丢失"，直接切镜头（稳定态实测峰值 2m，够不到）
+// A/B 用：VIS_MERGE=sum 回到"新旧偏移整份累加"的老规则，默认 max（同向不叠加）
+const VIS_MERGE = (typeof process !== 'undefined' && process.env && process.env.VIS_MERGE) || 'max';
 
 export function frameOf(bits, edge) {
   return {
@@ -76,7 +78,7 @@ export class NetCore {
     this.connected = false;
     this.rolls = 0;
     this.maxErr = 0;
-    this.visual = { x: 0, z: 0, h: 0, t: 0, dur: 0.15 };
+    this.visual = { x: 0, z: 0, h: 0, t: 0, tx: 0, tz: 0, th: 0, glide: false, lastInj: 0 };
     this.tickClock = null; // 本地自由推进的服务器 tick 时钟（不受快照成帧影响）
     this.hardSnap = false; // 仅由 setVisual 在"整段丢失"级别的大偏差上置位，相机同帧重定位
     this.snapHz = 0;
@@ -374,36 +376,70 @@ export class NetCore {
   }
 
   // ---------- 对账修正的视觉吸收 ----------
-  // 修正是叠加的：新修正必须接上上一笔尚未衰减完的偏移，否则这一帧会把旧偏移凭空抹掉，
-  // 渲染位姿当场跳掉——快照 20Hz、衰减 0.25s，意味着每笔修正都只走完约 40% 就被下一笔覆盖。
+  // 渲染位姿 = 权威位姿 + 偏移。所以判"看不看得见"只有一条：偏移的变化会不会让画面动。
+  //  · 偏移变深是免费的：那一下正好抵掉同一帧里权威把车拽回来的距离，画面一动不动。
+  //  · 偏移变浅就是看得见的滑动：必须限速，否则镜头横扫。
+  // 转弯时预测系统性领先权威约 1m，这份滞后每份快照都被重新量一遍——它是"同一笔欠账"，
+  // 不是新的位移。老规则把它逐份累加（dx += v.x），于是 0.9m 的滞后滚成 7.4m 的横移
+  // （test/visual-merge.mjs 实测），车被画到玩家以为的位置之外，那就是"卡顿/甩尾"。
+  // 现在：同向的重测按"变深立刻跟上、变浅限速滑回"处理——跟上不花画面，滑回才看得见；
+  // 换了方向才是真纠偏，累加后滑到最新读数；滞差不再被报上来（HOLD_MS）就滑回 0。
   setVisual(dx, dz, dh) {
     const v = this.visual;
-    if (v.t > 0) { dx += v.x; dz += v.z; dh += v.h; }
-    const d = Math.hypot(dx, dz);
-    const ad = Math.abs(dh);
-    if (d < 0.05 && ad < 0.015) return;
-    if (d > CUT_DIST) { // 整段丢失：一次切到位，交给相机同步重定位，不做长距离横扫
-      this.visual = { x: 0, z: 0, h: 0, t: 0, dur: 0.15 };
+    // 判"是不是同一笔滞差"要跟上一次报上来的读数比，不是跟当前垫着的偏移比：
+    // 转弯时滞差的方向跟着车头一起转，几十毫秒就转十几度，跟累加后的混合方向已经不同向了，
+    // 那样会一路走进下面的累加分支，又把 1m 滚成几米。
+    const lx = v.rx === undefined ? dx : v.rx, lz = v.rz === undefined ? dz : v.rz;
+    const cn = Math.hypot(lx, lz);
+    const nn = Math.hypot(dx, dz);
+    const cos = cn > 0.02 && nn > 0.02 ? (dx * lx + dz * lz) / (cn * nn) : 0;
+    let nx = dx, nz = dz, nh = dh, glide = false;
+    let gx = dx, gz = dz, gh = dh; // 滑行要停下来的位置
+    if ((this.visualMerge || VIS_MERGE) === 'sum') { nx = dx + v.x; nz = dz + v.z; nh = dh + v.h; glide = true; }
+    else if (cos > 0.6) {
+      // 同一笔滞差的最新读数。变深就直接跟上：那一下正好抵掉权威把车拽回来的距离，画面不动。
+      // 变浅则不能一下抽掉（400ms 档实测这样会单帧横移 3 倍步长，门禁判为瞬移）：
+      // 先按连续性垫上，再把超出最新读数的部分交给限速滑行。
+      const carry = Math.hypot(v.x, v.z);
+      if (nn >= carry * 0.98) { nx = dx; nz = dz; nh = dh; glide = false; }
+      else { nx = dx + v.x; nz = dz + v.z; nh = dh + v.h; gx = dx; gz = dz; gh = dh; glide = true; }
+    } else if (cn > 0.02 || nn > 0.02) {
+      nx = dx + v.x; nz = dz + v.z; nh = dh + v.h;
+      gx = dx; gz = dz; gh = dh;
+      glide = true; // 新方向的纠偏：画面不能跳，慢慢滑
+    }
+    if (Math.hypot(nx, nz) > CUT_DIST) { // 整段丢失：一次切到位，交给相机同步重定位
+      this.visual = { x: 0, z: 0, h: 0, t: 0, tx: 0, tz: 0, th: 0, glide: false, lastInj: 0 };
       this.hardSnap = true;
       return;
     }
-    // 时长由"最大偏差 / 允许的最快偿还速度"给出：偏差越大滑得越久，滑速恒定，
-    // 所以无论延迟多高，单帧的视觉横移与转向都不会超过这个上限
-    this.visual = {
-      x: dx, z: dz, h: dh, t: 1,
-      dur: clamp(Math.max(d / MAX_LAT, ad / MAX_YAW), 0.12, MAX_PAY_MS),
-    };
+    v.x = nx; v.z = nz; v.h = nh;
+    v.t = 1; // 只作为"有偏移在生效"的标记，实际收多少由 decayVisual 的限速决定
+    v.rx = dx; v.rz = dz; v.rh = dh; // 最近一次报上来的滞差本身
+    v.tx = gx; v.tz = gz; v.th = gh; // 目标：滑到这儿就停
+    v.glide = glide;
+    v.lastInj = nowMs();
   }
 
   decayVisual(dtS) {
     const v = this.visual;
     if (v.t <= 0) return;
-    v.t = Math.max(0, v.t - dtS / (v.dur || 0.15));
-    v.x *= v.t; v.z *= v.t; v.h *= v.t;
+    if (!v.glide) return; // 同向重测：偏移跟着读数走，本身不偿还
+    // 滞差还在被反复量到就原地不动；连续 HOLD_MS 没再报上来，说明它已经消失了，滑回 0
+    const back = nowMs() - (v.lastInj || 0) > HOLD_MS;
+    const tx = back ? 0 : (v.tx || 0), tz = back ? 0 : (v.tz || 0), th = back ? 0 : (v.th || 0);
+    let dx = tx - v.x, dz = tz - v.z, dh = th - v.h;
+    const step = MAX_LAT * dtS, slat = Math.hypot(dx, dz);
+    if (slat > step) { const k = step / slat; v.x += dx * k; v.z += dz * k; }
+    else { v.x = tx; v.z = tz; }
+    const srot = Math.abs(dh), maxYaw = MAX_YAW * dtS;
+    if (srot > maxYaw) v.h += Math.sign(dh) * maxYaw; else v.h = th;
+    if (Math.hypot(v.x, v.z) < 0.02 && Math.abs(v.h) < 0.006) { v.t = 0; v.x = 0; v.z = 0; v.h = 0; }
   }
 
-  // 最终渲染位姿：物理状态 + 尚未衰减完的修正偏移。
-  // 模型与相机都只读这一份，避免"模型平滑、相机硬跳"互相拉扯。
+  // 最终渲染位姿：物理状态 + 尚未偿完的修正偏移（偏移 = 基数 × t，t 匀速走到 0）。
+  // 模型与相机都只从这一份取值：以前 net.js 又往 model 上叠了一次偏移，两条路径一旦语义
+  // 改变（比如这里换成基数×t）就会各画各的，车身与镜头错位。
   syncPose(dtS) {
     const c = this.me;
     if (!c) return null;
@@ -413,6 +449,7 @@ export class NetCore {
     c.rx = c.x + v.x * k;
     c.rz = c.z + v.z * k;
     c.rh = c.h + v.h * k;
+    if (c.model) { c.model.position.x = c.rx; c.model.position.z = c.rz; c.model.rotation.y = c.rh; }
     // 相机航向的目标是"行驶朝向" m，它每份快照都会被权威值整份覆盖。
     // 这里给它同一套衰减，相机就不会吃到 m 的阶跃（漂移结束时 m 会一次转掉十几度）。
     c.rm = c.rm === undefined ? c.m : dampAngle(c.rm, c.m, 10, dtS);

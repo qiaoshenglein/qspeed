@@ -32,7 +32,7 @@ for (let i = 0; i < 100 && !port; i++) {
 }
 if (!port) { console.log('FAIL 服务器未启动'); process.exit(1); }
 const health = await (await fetch(`http://localhost:${port}/healthz`)).json();
-if (health.build !== 'qq-speed-net-v2') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
+if (health.build !== 'qq-speed-net-v3') { console.log('FAIL 命中的是旧服务进程', health); process.exit(1); }
 
 const track = new TrackSim(LAYOUTS[MAPS[0].layout], { isBridge: MAPS[0].isBridge });
 const FRAME_MS = 1000 / 60;

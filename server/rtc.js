@@ -16,7 +16,7 @@
 //  1) 服务器的公网地址能被写进候选（EIP 直绑时 RTC_PUBLIC_IP 填公网 IP，或用网卡地址）
 //  2) 安全组放行这一段 UDP（RTC_PORT_RANGE）
 import { RTCPeerConnection } from 'werift';
-import { S } from '../shared/proto.js';
+import { S, C } from '../shared/proto.js';
 
 // 只有下行需要选通道：快照与事件走不可靠通道，其余走可靠通道。
 // 上行不必分流——玩家输入全部走可靠通道（见文件头的边沿位说明）。
@@ -46,7 +46,7 @@ export function createRtcHub({ onMessage, onClose, onError }) {
   let lastError = '';
   // 连接断了就从表里消失，所以"我们主动丢了多少快照"必须另存一份累计值，
   // 否则运维看到玩家抖动却查不到是被自己的背压策略丢的、还是链路丢的
-  const totals = { fastDropped: 0, framesOut: 0, bytesOut: 0 };
+  const totals = { fastDropped: 0, framesOut: 0, bytesOut: 0, preHello: 0 };
 
   class Peer {
     constructor(id, pc) {
@@ -133,7 +133,12 @@ export function createRtcHub({ onMessage, onClose, onError }) {
       ch.onmessage = (m) => {
         const bytes = asBytes(m);
         peer.lastRecv = Date.now();
-        if (!peer.helloAt) peer.helloAt = Date.now();
+        // 席位还没建就收到的上行会被房间层丢掉（认不出这是谁）。这种事以前完全没有痕迹：
+        // 现在计个数，运维看到"建席前丢弃 > 0"就知道是客户端的上行顺序出了问题。
+        if (!peer.helloAt) {
+          if (bytes[0] === C.HELLO) peer.helloAt = Date.now();
+          else { peer.preHello = (peer.preHello || 0) + 1; totals.preHello++; }
+        }
         try { onMessage(peer, bytes); } catch (e) { lastError = String(e?.message || e); onError?.(e); }
       };
       ch.onclose = () => peer.markDead();
@@ -175,6 +180,7 @@ export function createRtcHub({ onMessage, onClose, onError }) {
         sentFrames: totals.framesOut,
         sentKb: Math.round(totals.bytesOut / 1024),
         fastDropped: totals.fastDropped,
+        preHelloDropped: totals.preHello,
         lastError,
       };
     },

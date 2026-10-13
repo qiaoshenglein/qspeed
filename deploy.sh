@@ -25,7 +25,7 @@ mkdir -p "$TMP"
 PIDF="$TMP/deploy.pid"
 PORTF="$TMP/deploy.port"
 LOGF="$TMP/server.log"
-BUILD_ID="qq-speed-net-v2"
+BUILD_ID="qq-speed-net-v3"
 ENVF="$ROOT/.deploy.env"
 
 # 上次 setup 存下来的参数（真实环境变量优先，方便临时覆盖）
@@ -123,6 +123,14 @@ do_smoke() {
       printf '  ✗ %-18s\n%s\n' "$t" "$(printf '%s' "$out" | tr -d '\000' | grep -E '^(FAIL|结果)' | head -6)"
     fi
   done
+  # 对账偏移机制的确定性门禁：这条不依赖机器负载，专门盯"同向滞差被逐份快照累加"这个复发过的坑
+  if out="$("$BUN_BIN" test/visual-merge.mjs 2>&1 | tr -d '\000')"; then
+    printf '  ✓ %-18s %s\n' "visual-merge" "$(printf '%s' "$out" | grep -E '^✓ 现行规则' | head -1)"
+  else
+    fails=$((fails + 1))
+    say "  ✗ visual-merge：对账偏移又把车画到玩家以为的位置之外了（那是'卡顿/甩尾'的真因，见 test/visual-merge.mjs）"
+    printf '%s\n' "$(printf '%s' "$out" | grep -E '^(  现行|✗|✓)' | head -6)"
+  fi
   # 道具模式与竞速模式协议不同，net-race 要各自跑一遍
   if out="$(ITEM=1 "$BUN_BIN" test/net-race.mjs 2>&1)" && printf '%s' "$out" | grep -q '道具模式'; then
     printf '  ✓ %-18s %s\n' "net-race(道具)" "$(printf '%s' "$out" | tr -d '\000' | grep -E '^结果' | tail -1)"

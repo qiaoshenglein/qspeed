@@ -29,16 +29,11 @@ export class NetClient extends NetCore {
     }
   }
 
-  // 本车：物理预测 + 对账偏移衰减（rx/rz/rh 由 syncPose 统一给出，模型与相机同源）
+  // 本车：物理预测 + 对账偏移吸收（rx/rz/rh 与模型位姿都由 syncPose 统一给出，模型与相机同源）
   syncOwn(dt) {
     const c = this.me;
     if (!c) return;
     this.syncPose(dt);
-    if (this.visual.t > 0) {
-      c.model.position.x += this.visual.x;
-      c.model.position.z += this.visual.z;
-      c.model.rotation.y += this.visual.h;
-    }
   }
 
   syncRemote(dt, camPos) {

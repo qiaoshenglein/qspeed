@@ -107,7 +107,7 @@ const server = Bun.serve({
     }
     if (url.pathname === '/healthz') {
       return Response.json({
-        ok: true, build: 'qq-speed-net-v2', proto: 1, sim_hz: 120,
+        ok: true, build: 'qq-speed-net-v3', proto: 1, sim_hz: 120,
         rooms: rooms.size, uptime_ms: Date.now() - startedAt, maps: MAPS.length,
         rtc: hub.info(),
       });
