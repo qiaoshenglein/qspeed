@@ -131,6 +131,14 @@ do_smoke() {
     say "  ✗ visual-merge：对账偏移又把车画到玩家以为的位置之外了（那是'卡顿/甩尾'的真因，见 test/visual-merge.mjs）"
     printf '%s\n' "$(printf '%s' "$out" | grep -E '^(  现行|✗|✓)' | head -6)"
   fi
+  # 快照通道死锁的止损门禁：不拦住它，玩家会画面定死而客户端仍显示"已连接"
+  if out="$("$BUN_BIN" test/rtc-jam.mjs 2>&1 | tr -d '\000')"; then
+    printf '  ✓ %-18s %s\n' "rtc-jam" "$(printf '%s' "$out" | grep -E '^结果' | tail -1)"
+  else
+    fails=$((fails + 1))
+    say "  ✗ rtc-jam：通道不再排空时服务器没有止损（玩家会画面定死却没有报错）"
+    printf '%s\n' "$(printf '%s' "$out" | grep -E '^(FAIL|结果)' | head -6)"
+  fi
   # 道具模式与竞速模式协议不同，net-race 要各自跑一遍
   if out="$(ITEM=1 "$BUN_BIN" test/net-race.mjs 2>&1)" && printf '%s' "$out" | grep -q '道具模式'; then
     printf '  ✓ %-18s %s\n' "net-race(道具)" "$(printf '%s' "$out" | tr -d '\000' | grep -E '^结果' | tail -1)"

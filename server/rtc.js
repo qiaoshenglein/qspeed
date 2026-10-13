@@ -35,6 +35,8 @@ const PUBLIC_IP = (process.env.RTC_PUBLIC_IP || '').trim();
 
 // 通道缓冲超过这个量就不再往 fast 里塞（宁可丢快照，也不把延迟堆成排队）
 const FAST_QUEUE_LIMIT = 32000;
+// 连续丢这么多帧（20Hz 下约 2 秒）就判定这条通道再也不排空了，直接断开让客户端回线
+const MAX_DROP_STREAK = 40;
 // 一直没发过 HELLO 的连接视为僵尸（信令成功但页面被关掉），回收掉
 const ORPHAN_MS = 20000;
 // 应用层保活：客户端每 1s 发 PING，超过这个时间没收到任何东西就判定掉线
@@ -46,7 +48,7 @@ export function createRtcHub({ onMessage, onClose, onError }) {
   let lastError = '';
   // 连接断了就从表里消失，所以"我们主动丢了多少快照"必须另存一份累计值，
   // 否则运维看到玩家抖动却查不到是被自己的背压策略丢的、还是链路丢的
-  const totals = { fastDropped: 0, framesOut: 0, bytesOut: 0, preHello: 0 };
+  const totals = { fastDropped: 0, framesOut: 0, bytesOut: 0, preHello: 0, jamKilled: 0 };
 
   class Peer {
     constructor(id, pc) {
@@ -60,6 +62,7 @@ export function createRtcHub({ onMessage, onClose, onError }) {
       this.bytesOut = 0;
       this.framesOut = 0;
       this.framesFastDrop = 0;
+      this.dropStreak = 0;
       // room.js 沿用 WS 时代的句柄形状：连接身份放在 data.connId
       this.data = { connId: id };
       peers.set(id, this);
@@ -81,8 +84,20 @@ export function createRtcHub({ onMessage, onClose, onError }) {
         // 快照队列都在 32KB 之外了：这条链路已经不是"慢"而是"堵"，丢掉旧的比留着更有帮助
         this.framesFastDrop++;
         totals.fastDropped++;
+        // 但这个丢弃必须是"暂时"的：werift 的 bufferedAmount 只在分片完整发出后才回退，
+        // 通道一旦不再排空就永远停在高位，于是我们对该玩家永久只丢快照——画面定死，
+        // 客户端这边却还显示"已连接"，什么报错都没有。公网实测见过 8 秒内累计 220 帧全丢。
+        // 连续丢满 MAX_DROP_STREAK 帧就判定这是死链路：关掉它，席位交给自动驾驶，
+        // 客户端的自动回线会重建一条新通道。宁可看见"连接中断"，也不要看不见的定身。
+        this.dropStreak++;
+        if (this.dropStreak >= MAX_DROP_STREAK) {
+          lastError = `对端 ${this.id} 的快照通道连续积压 ${this.dropStreak} 帧未排空，判定为死链路`;
+          totals.jamKilled++;
+          this.markDead();
+        }
         return;
       }
+      this.dropStreak = 0;
       try { ch.send(bytes); this.bytesOut += bytes.length; this.framesOut++; totals.framesOut++; totals.bytesOut += bytes.length; } catch { this.markDead(); }
     }
 
@@ -180,6 +195,8 @@ export function createRtcHub({ onMessage, onClose, onError }) {
         sentFrames: totals.framesOut,
         sentKb: Math.round(totals.bytesOut / 1024),
         fastDropped: totals.fastDropped,
+        jamKilled: totals.jamKilled, // 因"通道再也不排空"被我们主动断掉的连接数
+        dropStreakNow: Math.max(0, ...[...peers.values()].map((p) => p.dropStreak || 0)),
         preHelloDropped: totals.preHello,
         lastError,
       };

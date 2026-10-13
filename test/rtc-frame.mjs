@@ -44,11 +44,12 @@ const steer = (car) => {
   return { up: true, down: false, left: e > 0.03, right: e < -0.03, shift: false, upPressed: false, wPressed: false, nitroPressed: false };
 };
 
+const sign = REMOTE || signUrl(port);
 const nets = [];
 for (let i = 0; i < 2; i++) {
   const car = new PlayerCar(track, stubModel(), `车${i}`);
   placeOnGrid(car, 0);
-  const net = new NetCore({ url: signUrl(port), name: `车${i}`, skin: i, map: 'city', laps: 2, mode: 0, diff: 1, create: i === 0, code: '', track, ownCar: car });
+  const net = new NetCore({ url: sign, name: `车${i}`, skin: i, map: 'city', laps: 2, mode: 0, diff: 1, create: i === 0, code: '', track, ownCar: car });
   net.frames = [];      // 每帧耗时
   net.offsets = [];     // 每帧的视觉偏差（正在偿还的横向距离）
   net.cuts = 0;
@@ -74,12 +75,16 @@ while (Date.now() - t0 < 8000 && !nets.every((n) => n.roster.length >= 2)) {
 const code = nets[0].code;
 for (const n of nets) n.ready(true);
 await Bun.sleep(200);
-for (let i = 0; i < 30; i++) {
-  const r = await fetch(`${http}/api/admin/rooms/${code}/start?key=k`, { method: 'POST' });
-  if (r.ok) break;
-  await Bun.sleep(150);
+// 远端那台机器的后台令牌不是我们的：让它自己按"邀请窗口 5s + 倒计时 3s"开赛
+if (!REMOTE) {
+  for (let i = 0; i < 30; i++) {
+    const r = await fetch(`${http}/api/admin/rooms/${code}/start?key=k`, { method: 'POST' });
+    if (r.ok) break;
+    await Bun.sleep(150);
+  }
 }
-for (let i = 0; i < 200 && nets.some((n) => n.phase < 2); i++) { for (const n of nets) n.step(16, steer(n.me), false); await Bun.sleep(30); }
+for (let i = 0; i < (REMOTE ? 550 : 200) && nets.some((n) => n.phase < 2); i++) { for (const n of nets) n.step(16, steer(n.me), false); await Bun.sleep(30); }
+if (nets.some((n) => n.phase < 2)) { console.log(`FAIL 没能进入比赛（相位 ${nets.map((n) => n.phase)}）· 房间 ${code}`); process.exit(1); }
 
 const h0 = await (await fetch(`${http}/healthz`)).json();
 const wall0 = performance.now();
